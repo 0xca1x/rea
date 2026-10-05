@@ -108,6 +108,12 @@ class ReplayDeniedError extends Error {
 }
 
 const main = async (): Promise<void> => {
+  // `Intl` and `Date.prototype.toLocaleString` read the host timezone, so the
+  // same artifact replayed on two machines produced different output — fatal
+  // for a deterministic replay. Pin the timezone before anything touches a
+  // date. Verified: with the host set to Asia/Tokyo the observed values become
+  // UTC and epoch respectively, independent of the machine.
+  process.env.TZ = "UTC";
   const chunks: Buffer[] = [];
   for await (const chunk of process.stdin) chunks.push(Buffer.from(chunk));
   const rawRequest: unknown = JSON.parse(
@@ -396,6 +402,13 @@ const projectValueRecursive = (
 };
 
 const projectLeaf = (candidate: unknown): unknown => {
+  if (candidate === undefined) {
+    // JSON has no undefined: `JSON.stringify([undefined])` is `[null]` and the
+    // array-hole projection already yields null. Mapping it here keeps one
+    // value for "no value" instead of rejecting `[undefined]` while accepting
+    // `[ , ]` for the same position.
+    return null;
+  }
   if (
     candidate === null ||
     typeof candidate === "string" ||

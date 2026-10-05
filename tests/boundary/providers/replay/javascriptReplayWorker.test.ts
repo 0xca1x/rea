@@ -497,6 +497,57 @@ describe("deterministic replay Date compatibility", () => {
   });
 });
 
+it("maps undefined to null so a position is never silently unrepresentable", async () => {
+  const workerRequest = await request("parser.mjs", "esm", "default", []);
+  workerRequest.left.modules[0] = {
+    alias: "entry",
+    format: "esm",
+    dependencies: {},
+    source: "export default function () { return [undefined, 1]; }",
+  };
+  const result = await runWorker(workerRequest);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    left: [{ outcome: "return", value: [null, 1] }],
+  });
+});
+
+it("still rejects values JSON cannot represent at all", async () => {
+  const workerRequest = await request("parser.mjs", "esm", "default", []);
+  workerRequest.left.modules[0] = {
+    alias: "entry",
+    format: "esm",
+    dependencies: {},
+    source: "export default function () { return [10n]; }",
+  };
+  const result = await runWorker(workerRequest);
+  expect(JSON.parse(result.stdout)).toMatchObject({
+    left: [
+      {
+        outcome: "serialization_error",
+        exception: { message: "Unsupported replay result type: bigint" },
+      },
+    ],
+  });
+});
+
+it("pins the timezone so locale output is machine independent", async () => {
+  const workerRequest = await request("parser.mjs", "esm", "default", []);
+  workerRequest.left.modules[0] = {
+    alias: "entry",
+    format: "esm",
+    dependencies: {},
+    source:
+      "export default function () { return [new Intl.DateTimeFormat().resolvedOptions().timeZone, new Date(0).toLocaleString()]; }",
+  };
+  const result = await runWorker(workerRequest);
+  const outcome = JSON.parse(result.stdout).left[0];
+  expect(outcome.outcome).toBe("return");
+  expect(outcome.value[0]).toBe("UTC");
+  // The rendered clock is 12:00 UTC regardless of the host zone. The exact
+  // wording is ICU-build dependent, so only the pinned hour is asserted.
+  expect(outcome.value[1]).toContain("12:00:00");
+});
+
 describe("replay array projection", () => {
   it.each([
     ["Array(3)", [null, null, null]],
