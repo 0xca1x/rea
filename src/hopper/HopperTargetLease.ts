@@ -35,12 +35,12 @@ export const acquireHopperTargetLease = async (input: {
 }): Promise<HopperTargetLeaseAcquisition> => {
   const directory = input.directory ?? leaseDirectory;
   await ensureLeaseDirectory(directory);
-  // The canonical path only derives the lease key; it never authorizes access.
-  // `realpath` is expected to fail when the target or a path component is
-  // missing (ENOENT, ENOTDIR), unreadable (EACCES), or a symlink loop (ELOOP).
-  // The lexical `resolve` fallback still yields a deterministic key, so the
-  // only cost is that symlinked spellings of such a path may take separate
-  // leases.
+  // The normal Hopper path supplies a readable canonical target from
+  // `parseBinaryTarget`. This extra `realpath` also canonicalizes direct
+  // callers and may fail if the filesystem changes before lease acquisition.
+  // Any failure falls back to a lexical absolute path because this value only
+  // keys coordination and never authorizes access. The fallback discards the
+  // filesystem error and can let aliases of the same target take separate leases.
   const targetPath = await realpath(input.targetPath).catch(() =>
     resolve(input.targetPath),
   );
