@@ -343,13 +343,7 @@ class NativeMacOSClient implements AnalysisClient {
     // Entitlements XML is printed to stdout; stderr echoes the path.
     const entitlementValue = parseEntitlements(entitlements.value.stdout);
     const verifyPath = signedCodePath(this.target);
-    const verify = await this.#run(
-      "inspect_signature",
-      "codesign",
-      // --deep verifies nested frameworks, helpers, extensions and XPC services.
-      ["--verify", "--deep", "--strict", "--verbose=2", verifyPath],
-      { signal, acceptNonZero: true },
-    );
+    const verify = await this.#verifySignature(verifyPath, signal);
     if (!verify.ok) return verify;
     const captures = [
       display.value,
@@ -407,6 +401,20 @@ class NativeMacOSClient implements AnalysisClient {
       limitations: result.limitations,
       locations: [],
     });
+  }
+
+  /** Local verification of the opened code, including nested code. */
+  #verifySignature(
+    path: string,
+    signal?: AbortSignal,
+  ): Promise<Result<NativeCommandCapture, AnalysisError>> {
+    // --deep verifies nested frameworks, helpers, extensions and XPC services.
+    return this.#run(
+      "inspect_signature",
+      "codesign",
+      ["--verify", "--deep", "--strict", "--verbose=2", path],
+      { signal, acceptNonZero: true },
+    );
   }
 
   async #inspectMixedSignatureSlices(
