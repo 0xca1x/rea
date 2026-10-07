@@ -71,6 +71,13 @@ an XML graph golden. `verify:asset-catalog` compiles source-owned colors with
 `actool`, invokes real `assetutil`, then checks CLI/MCP results, exact catalog
 digest, every raw metadata field, pagination and malformed input rejection.
 Neither artifact workflow requires Hopper or launches it. Both run in macOS CI.
+`verify:code-signature` needs only macOS with Command Line Tools. It re-signs
+copies of a clang-built fixture with real `codesign`: ad hoc, hardened
+runtime, hardened runtime with relaxing entitlements, and `library,restrict`
+flags. It checks that `inspect-signature` decodes those flags and derives the
+expected security facets. It also checks a platform binary, which must report a
+platform identifier, and a bundle with an added unsealed file, which must fail
+strict verification. CLI and stdio MCP results must match.
 `verify:macos-bundle` needs only macOS with Command Line Tools. It compiles a
 source-owned app with `clang`: a versioned framework, XPC services, an app
 extension, a login item, a privileged helper, launchd plists, and a helper tool,

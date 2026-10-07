@@ -1,4 +1,11 @@
 import { z } from "zod";
+import {
+  codeDirectorySchema,
+  sealedResourcesSchema,
+  securityFacetsSchema,
+  signatureVerificationSchema,
+  stapledTicketSchema,
+} from "./codeSigningPosture.js";
 import { jsonValueSchema } from "./jsonValue.js";
 
 const hexAddress = z.string().regex(/^0x[a-fA-F0-9]+$/u);
@@ -113,6 +120,11 @@ export const inspectSignatureSchema = z.object({
   entitlements: jsonValueSchema.nullable(),
   timestamp: z.string().nullable(),
   hardened_runtime: z.boolean().nullable(),
+  code_directory: codeDirectorySchema.nullable(),
+  sealed_resources: sealedResourcesSchema,
+  verification: signatureVerificationSchema.nullable(),
+  stapled_ticket: stapledTicketSchema,
+  security_facets: securityFacetsSchema,
   provenance: z.array(nativeCommandInvocationSchema),
   limitations: z.array(z.string()),
 });

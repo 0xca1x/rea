@@ -1,4 +1,8 @@
 import {
+  codeDirectoryFlagNames,
+  type CodeDirectory,
+} from "../../domain/codeSigningPosture.js";
+import {
   inspectSignatureSchema,
   type InspectSignature,
 } from "../../domain/nativeInspection.js";
@@ -23,9 +27,19 @@ export const parseCodeSignature = (
   const values = new Map<string, string>();
   const authorities: string[] = [];
   const cdhashes: string[] = [];
+  let sealed: InspectSignature["sealed_resources"] = {
+    status: "unknown",
+    version: null,
+    rules: null,
+    files: null,
+  };
   for (const line of fields.split("\n")) {
     if (line.startsWith("CodeDirectory ")) {
       values.set("CodeDirectory", line.slice("CodeDirectory ".length));
+      continue;
+    }
+    if (line.startsWith("Sealed Resources")) {
+      sealed = parseSealedResources(line);
       continue;
     }
     const separator = line.indexOf("=");
@@ -48,6 +62,18 @@ export const parseCodeSignature = (
     entitlements: null,
     timestamp: values.get("Timestamp") ?? null,
     hardened_runtime: parseRuntime(values.get("CodeDirectory")),
+    code_directory: unsigned ? null : parseCodeDirectory(values),
+    sealed_resources: unsigned
+      ? { status: "none", version: null, rules: null, files: null }
+      : sealed,
+    verification: null,
+    stapled_ticket: {
+      status: "not-applicable",
+      path: null,
+      sha256: null,
+      size: null,
+    },
+    security_facets: [],
     limitations: unsigned
       ? ["Artifact is not signed."]
       : [
@@ -103,4 +129,63 @@ const parseRuntime = (value: string | undefined): boolean | null => {
   const flags = /(?:^|\s)flags=[^(]*\(([^)]*)\)/u.exec(value)?.[1];
   if (flags === undefined) return null;
   return flags.split(",").some((flag) => flag.trim() === "runtime");
+};
+
+const integerField = (
+  text: string | undefined,
+  pattern: RegExp,
+  radix = 10,
+): number | null => {
+  const match = text === undefined ? undefined : pattern.exec(text)?.[1];
+  if (match === undefined) return null;
+  const value = Number.parseInt(match, radix);
+  return Number.isSafeInteger(value) ? value : null;
+};
+
+/**
+ * `CodeDirectory v=20500 size=… flags=0x10000(runtime) hashes=3209+7
+ * location=embedded`, plus the separate hash, platform, runtime-version and
+ * executable-segment lines. Flag names are decoded from the numeric value.
+ */
+const parseCodeDirectory = (
+  values: ReadonlyMap<string, string>,
+): CodeDirectory | null => {
+  const line = values.get("CodeDirectory");
+  if (line === undefined) return null;
+  const flags = integerField(line, /(?:^|\s)flags=0x([0-9a-f]+)/iu, 16);
+  return {
+    version: /(?:^|\s)v=(\S+)/u.exec(line)?.[1] ?? null,
+    flags:
+      flags === null
+        ? null
+        : { value: flags, names: codeDirectoryFlagNames(flags) },
+    code_slots: integerField(line, /(?:^|\s)hashes=(\d+)\+/u),
+    special_slots: integerField(line, /(?:^|\s)hashes=\d+\+(\d+)/u),
+    location: /(?:^|\s)location=(\S+)/u.exec(line)?.[1] ?? null,
+    hash_type: values.get("Hash type")?.split(/\s+/u)[0] ?? null,
+    platform_identifier: integerField(
+      values.get("Platform identifier"),
+      /^(\d+)$/u,
+    ),
+    runtime_version: values.get("Runtime Version") ?? null,
+    executable_segment_flags: integerField(
+      values.get("Executable Segment flags"),
+      /^0x([0-9a-f]+)$/iu,
+      16,
+    ),
+  };
+};
+
+/** `Sealed Resources version=2 rules=13 files=290` or `Sealed Resources=none`. */
+const parseSealedResources = (
+  line: string,
+): InspectSignature["sealed_resources"] => {
+  if (/^Sealed Resources\s*=\s*none$/u.test(line.trim()))
+    return { status: "none", version: null, rules: null, files: null };
+  return {
+    status: "sealed",
+    version: integerField(line, /\sversion=(\d+)/u),
+    rules: integerField(line, /\srules=(\d+)/u),
+    files: integerField(line, /\sfiles=(\d+)/u),
+  };
 };

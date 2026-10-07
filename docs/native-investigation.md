@@ -12,6 +12,28 @@ input file and include the observed lipo slice offset for universal binaries.
 If that offset is unavailable, segment evidence locations are omitted with an
 explicit limitation; architecture inventory locations remain available.
 
+- `inspect_signature` / `rea inspect-signature <app-or-mach-o>` reports
+  codesign identity, requirements and entitlements, and adds:
+  - **Observed facts:**
+    - the parsed CodeDirectory, with flags decoded from their numeric value
+      (`runtime`, `library-validation`, `restrict`, `kill`, `adhoc`,
+      `linker-signed`, …), slot counts, platform identifier and runtime
+      version;
+    - sealed resources;
+    - a local `codesign --verify --strict` result, with diagnostics and the
+      nested code it validated;
+    - whether a notarization ticket is stapled at `Contents/CodeResources`.
+      The ticket itself and Apple's notarization record are not checked,
+      because that needs the network.
+  - **Derived `security_facets`**, each with the flags or entitlements that
+    support it:
+    - library validation;
+    - whether dyld honors `DYLD_*` variables;
+    - debugger attach;
+    - executable-memory policy;
+    - App Sandbox.
+
+    System Integrity Protection, AMFI and setuid policy are not evaluated.
 - `inspect_asset_catalog` / `rea inspect-asset-catalog <app>` reads compiled
   `Assets.car` metadata through macOS `assetutil --info`. Catalog digests, raw
   rendition fields, pagination and exact UI resource-name matches are returned.

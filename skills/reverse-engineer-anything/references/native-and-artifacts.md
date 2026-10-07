@@ -69,6 +69,12 @@ ASAR, or DMG inputs when the artifact graph and findings help answer the
 question. It returns the complete artifact graph inline. Cite graph manifest
 IDs when using them.
 
+`inspect_signature` decodes CodeDirectory flags, runs local strict
+verification, reports a stapled notarization ticket, and derives security
+facets: library validation, `DYLD_*` handling, debugger attach, executable
+memory, and sandbox. Cite each facet's `evidence`; system policy such as SIP and
+AMFI is not evaluated.
+
 For an IPA or a macOS `.app`, ZIP, or DMG, pass the inventory Evidence to
 `project_apple_application_graph`. It reports application roots and nested
 bundles by path convention: app extensions, XPC services, frameworks, login

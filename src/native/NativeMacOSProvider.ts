@@ -53,6 +53,13 @@ import {
   type NativeCommandRunner,
 } from "./CommandRunner.js";
 import { parseCodeSignature } from "./parsers/codesign.js";
+import {
+  SIGNATURE_POSTURE_LIMITATIONS,
+  signatureVerification,
+  signedCodePath,
+  stapledTicket,
+} from "./NativeSignaturePosture.js";
+import { deriveSecurityFacets } from "../domain/codeSigningPosture.js";
 import { parseDemangledSymbols } from "./parsers/demangle.js";
 import { parseLipoArchitectures } from "./parsers/lipo.js";
 import {
@@ -335,9 +342,23 @@ class NativeMacOSClient implements AnalysisClient {
       /designated\s*=>\s*(.+)$/mu.exec(requirements.value.stdout)?.[1] ?? null;
     // Entitlements XML is printed to stdout; stderr echoes the path.
     const entitlementValue = parseEntitlements(entitlements.value.stdout);
-    const captures = [display.value, requirements.value, entitlements.value];
+    const verifyPath = signedCodePath(this.target);
+    const verify = await this.#run(
+      "inspect_signature",
+      "codesign",
+      ["--verify", "--strict", "--verbose=2", verifyPath],
+      { signal, acceptNonZero: true },
+    );
+    if (!verify.ok) return verify;
+    const captures = [
+      display.value,
+      requirements.value,
+      entitlements.value,
+      verify.value,
+    ];
     const limitations = [
       ...parsed.limitations,
+      ...SIGNATURE_POSTURE_LIMITATIONS,
       ...(entitlementValue.omittedPrototypeKeys === 0
         ? []
         : [
@@ -366,6 +387,18 @@ class NativeMacOSClient implements AnalysisClient {
       ...parsed,
       designated_requirement: requirementText,
       entitlements: entitlementValue.value,
+      verification: signatureVerification(
+        verify.value,
+        verifyPath,
+        isNonzeroUnsignedObservation(verify.value),
+      ),
+      stapled_ticket: await stapledTicket(this.target, signal),
+      security_facets: deriveSecurityFacets({
+        signed: !unsigned,
+        codeDirectory: parsed.code_directory,
+        entitlements: entitlementValue.value,
+        entitlementsKnown: unsigned || entitlements.value.exitCode === 0,
+      }),
       provenance,
       limitations,
     });
