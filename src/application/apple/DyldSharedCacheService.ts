@@ -1,5 +1,3 @@
-import { createHash } from "node:crypto";
-import { open } from "node:fs/promises";
 import { resolve } from "node:path";
 
 import { ArtifactReaderFailure } from "../../artifacts/ArtifactReader.js";
@@ -20,27 +18,6 @@ import { err, ok, type Result } from "../../domain/result.js";
 import { APPLE_APPLICATION_PROVIDER } from "../InvestigationProviders.js";
 
 const OPERATION = "inspect_dyld_shared_cache" as const;
-const HASH_CHUNK_BYTES = 1024 * 1024;
-
-const sha256File = async (
-  path: string,
-  signal?: AbortSignal,
-): Promise<string> => {
-  const handle = await open(path, "r");
-  try {
-    const hash = createHash("sha256");
-    const buffer = new Uint8Array(HASH_CHUNK_BYTES);
-    for (;;) {
-      signal?.throwIfAborted();
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      hash.update(buffer.subarray(0, bytesRead));
-    }
-    return hash.digest("hex");
-  } finally {
-    await handle.close();
-  }
-};
 
 /** Read one requested image through the cache, keeping absence explicit. */
 const inspectImage = async (
@@ -134,7 +111,8 @@ export const inspectDyldSharedCache = async (
     return ok(
       dyldSharedCacheResultSchema.parse({
         cache_path: cachePath,
-        main_file_sha256: await sha256File(cachePath, signal),
+        // The header and image list were read through this same handle.
+        main_file_sha256: await cache.mainSha256(signal),
         ...cache.header,
         images_total: cache.images.length,
         images: cache.images.map(({ path, address }) => ({

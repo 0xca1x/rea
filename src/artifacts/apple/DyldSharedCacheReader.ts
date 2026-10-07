@@ -1,3 +1,4 @@
+import { createHash } from "node:crypto";
 import { open, type FileHandle } from "node:fs/promises";
 
 import { applePlatform } from "../../domain/apple/applePlatforms.js";
@@ -19,6 +20,7 @@ const MAX_MAPPINGS = 64;
 const MAX_SUBCACHES = 256;
 const MAX_PATH_BYTES = 4096;
 const BLOCK_BYTES = 64 * 1024;
+const HASH_CHUNK_BYTES = 1024 * 1024;
 
 /** Byte offsets of `dyld_cache_header` fields in Apple's open-source dyld. */
 const FIELD = {
@@ -463,6 +465,28 @@ export class DyldSharedCache {
       available,
     );
     return { file: region.file.suffix, facts };
+  }
+
+  /** Digest of the main file through the handle its header was parsed from. */
+  async mainSha256(signal?: AbortSignal): Promise<string> {
+    const main = this.files[0];
+    if (main === undefined)
+      throw new ArtifactReaderFailure("format", "dyld cache has no main file");
+    const hash = createHash("sha256");
+    const buffer = Buffer.alloc(HASH_CHUNK_BYTES);
+    for (let position = 0; position < main.size;) {
+      signal?.throwIfAborted();
+      const { bytesRead } = await main.handle.read(
+        buffer,
+        0,
+        Math.min(buffer.length, main.size - position),
+        position,
+      );
+      if (bytesRead === 0) break;
+      hash.update(buffer.subarray(0, bytesRead));
+      position += bytesRead;
+    }
+    return hash.digest("hex");
   }
 
   async close(): Promise<void> {
