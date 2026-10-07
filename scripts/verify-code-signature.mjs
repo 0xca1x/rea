@@ -73,6 +73,13 @@ try {
     "executable-memory": "unrestricted",
     "app-sandbox": "not-sandboxed",
   });
+  // Deep verification reports the fixture's real nested code, all on disk.
+  assert.ok(plain.verification.validated_nested_code.length > 0);
+  assert.ok(
+    !plain.limitations.some((limitation) =>
+      limitation.includes("which does not exist"),
+    ),
+  );
   await withArtifactMcp(app, async (client) => {
     const viaMcp = await artifactMcpResult(client, "inspect_signature");
     assert.deepEqual(

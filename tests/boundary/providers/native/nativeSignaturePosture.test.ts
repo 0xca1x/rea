@@ -14,13 +14,15 @@ import {
   nativeMachoTarget as machoTarget,
 } from "../../../fixtures/nativeCommands.js";
 
+const TAMPERED_STDERR =
+  "--prepared:/Applications/Fixture.app/Contents/XPCServices/B.xpc\n--validated:/Applications/Fixture.app/Contents/XPCServices/B.xpc\n--validated:/Applications/Fixture.app/Contents/PlugIns/A.appex\n/Applications/Fixture.app: a sealed resource is missing or invalid\nfile modified: /Applications/Fixture.app/Contents/Resources/en.lproj/Main.nib\n";
+
 /** Fail only strict verification, as a tampered bundle does. */
 class TamperedRunner extends FixtureRunner {
   override async run(tool: string, arguments_: readonly string[]) {
     const result = await super.run(tool, arguments_);
     if (!result.ok || arguments_[0] !== "--verify") return result;
-    const stderr =
-      "--prepared:/Applications/Fixture.app/Contents/XPCServices/B.xpc\n--validated:/Applications/Fixture.app/Contents/XPCServices/B.xpc\n--validated:/Applications/Fixture.app/Contents/PlugIns/A.appex\n/Applications/Fixture.app: a sealed resource is missing or invalid\nfile modified: /Applications/Fixture.app/Contents/Resources/en.lproj/Main.nib\n";
+    const stderr = TAMPERED_STDERR;
     return ok({
       ...result.value,
       stdout: "",
@@ -225,6 +227,27 @@ describe("native signature posture boundaries", () => {
     });
   });
 
+  it("flags reported nested code that does not exist as a split path", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new NewlinePathRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    // The line projection splits the name; the fragment is flagged.
+    expect(result.verification?.validated_nested_code).toEqual([
+      `${app}/Contents/Helpers/odd`,
+    ]);
+    expect(result.limitations).toContainEqual(
+      expect.stringContaining(
+        `validated nested code at ${JSON.stringify(`${app}/Contents/Helpers/odd`)}, which does not exist`,
+      ),
+    );
+  });
+
   it("reports cancellation while hashing the stapled ticket", async () => {
     const { app, executable } = await fixtureApp("ticket");
     const controller = new AbortController();
@@ -274,6 +297,23 @@ class PlatformRunner extends FixtureRunner {
     return ok({
       ...result.value,
       stderr,
+      stderrBytes: Buffer.byteLength(stderr),
+    });
+  }
+}
+
+/** A nested helper whose file name contains a newline. */
+class NewlinePathRunner extends FixtureRunner {
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || arguments_[0] !== "--verify") return result;
+    const bundle = arguments_.at(-1) ?? "";
+    const stderr = `--validated:${bundle}/Contents/Helpers/odd\nname.app\n${bundle}: valid on disk\n`;
+    return ok({
+      ...result.value,
+      stdout: "",
+      stderr,
+      stdoutBytes: 0,
       stderrBytes: Buffer.byteLength(stderr),
     });
   }

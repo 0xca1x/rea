@@ -58,6 +58,7 @@ import {
   signatureVerification,
   signedCodePath,
   stapledTicket,
+  unconfirmedNestedCode,
 } from "./NativeSignaturePosture.js";
 import { deriveSecurityFacets } from "../domain/codeSigningPosture.js";
 import { parseDemangledSymbols } from "./parsers/demangle.js";
@@ -396,6 +397,14 @@ class NativeMacOSClient implements AnalysisClient {
       captures.push(...slices.value.captures);
       limitations.push(...slices.value.limitations);
     }
+    // Only the top-level signature decides "unsigned"; unsigned nested
+    // code inside a signed bundle makes the bundle invalid.
+    const verification = signatureVerification(
+      verify.value,
+      verifyPath,
+      unsigned,
+    );
+    limitations.push(...(await unconfirmedNestedCode(verification)));
     const provenance = captures.map((capture) =>
       invocation(capture, this.target.path),
     );
@@ -403,9 +412,7 @@ class NativeMacOSClient implements AnalysisClient {
       ...parsed,
       designated_requirement: requirementText,
       entitlements: entitlementValue.value,
-      // Only the top-level signature decides "unsigned"; unsigned nested
-      // code inside a signed bundle makes the bundle invalid.
-      verification: signatureVerification(verify.value, verifyPath, unsigned),
+      verification,
       stapled_ticket: await stapledTicket(this.target, signal),
       security_facets: deriveSecurityFacets({
         signed: !unsigned,

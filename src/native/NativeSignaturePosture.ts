@@ -141,3 +141,28 @@ export const SIGNATURE_POSTURE_LIMITATIONS = [
   "Signature verification is local `codesign --verify --deep --strict`; certificate revocation, Gatekeeper policy, and Apple's notarization records are not checked.",
   "Security facets are derived from CodeDirectory flags and entitlements; runtime policy such as System Integrity Protection, AMFI, and setuid bits can further restrict a process.",
 ];
+
+/**
+ * codesign prints one nested path per line, so a path that contains a newline
+ * is split into fragments. A reported path that does not exist on disk is
+ * named in a limitation instead of being trusted as complete.
+ */
+export const unconfirmedNestedCode = async (
+  verification: NonNullable<InspectSignature["verification"]>,
+): Promise<string[]> => {
+  const missing: string[] = [];
+  for (const path of verification.validated_nested_code)
+    try {
+      await lstat(path);
+    } catch (cause: unknown) {
+      const code = errorCode(cause);
+      // A denied lookup cannot confirm the path, but is no sign of a split one.
+      if (code === "EACCES" || code === "EPERM") continue;
+      if (code !== "ENOENT" && code !== "ENOTDIR") throw cause;
+      missing.push(path);
+    }
+  return missing.map(
+    (path) =>
+      `codesign reported validated nested code at ${JSON.stringify(path)}, which does not exist; a nested path probably contains a newline, so validated_nested_code and diagnostics hold fragments of it.`,
+  );
+};
