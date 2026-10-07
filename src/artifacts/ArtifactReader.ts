@@ -15,6 +15,15 @@ export interface ArtifactEntry {
   readonly unpacked: boolean;
   readonly limitations: readonly string[];
   readonly adapterKey: string;
+  /**
+   * Container checksum of the member's bytes in an algorithm other than
+   * SHA-256 (xar declares SHA-1 or MD5). The scan verifies it under the
+   * caller's integrity policy.
+   */
+  readonly declaredChecksum?: {
+    readonly algorithm: "sha1" | "md5" | "sha512";
+    readonly value: string;
+  };
   /** The container records this member but does not hold its bytes, such as an unresolved hard link. */
   readonly contentUnavailable?: boolean;
   /** Archive format of this member's own bytes, when the scan should expand it. */

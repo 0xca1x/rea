@@ -151,6 +151,22 @@ const collectMembers = (toc: Element): XarMember[] => {
   return members;
 };
 
+/** Expose a member's extracted checksum so a caller can apply its own policy. */
+const declaredDigest = (
+  checksum: { readonly algorithm: string; readonly value: string } | undefined,
+): Pick<ArtifactEntry, "declaredSha256" | "declaredChecksum"> => {
+  if (checksum === undefined) return { declaredSha256: null };
+  if (checksum.algorithm === "sha256")
+    return { declaredSha256: checksum.value };
+  const algorithm = checksum.algorithm;
+  return algorithm === "sha1" || algorithm === "md5" || algorithm === "sha512"
+    ? {
+        declaredSha256: null,
+        declaredChecksum: { algorithm, value: checksum.value },
+      }
+    : { declaredSha256: null };
+};
+
 /** Verify a member's extracted checksum as its decoded bytes stream past. */
 class ChecksumVerifier extends Transform {
   readonly #hash: Hash;
@@ -203,7 +219,19 @@ export class XarArtifactReader implements ArtifactReader {
   #heap = 0;
   #members: readonly XarMember[] = [];
 
-  constructor(private readonly path: string) {}
+  readonly #verifyChecksums: boolean;
+
+  /**
+   * @param options.verifyChecksums Fail `open()` streams whose bytes disagree
+   * with the member's extracted checksum (default). Inventory passes false and
+   * verifies the declared checksum itself under the caller's integrity policy.
+   */
+  constructor(
+    private readonly path: string,
+    options: { readonly verifyChecksums?: boolean } = {},
+  ) {
+    this.#verifyChecksums = options.verifyChecksums ?? true;
+  }
 
   async #load(signal?: AbortSignal): Promise<void> {
     if (this.#handle !== undefined) return;
@@ -364,8 +392,7 @@ export class XarArtifactReader implements ArtifactReader {
           member.data?.encoding === "application/octet-stream"
             ? this.#heap + member.data.offset
             : null,
-        // xar declares SHA-1/MD5 checksums, which open() verifies itself.
-        declaredSha256: null,
+        ...declaredDigest(member.data?.extractedChecksum),
         unpacked: false,
         limitations: [
           ...(member.kind === "symlink" && member.link !== undefined
@@ -409,7 +436,7 @@ export class XarArtifactReader implements ArtifactReader {
       );
     const checksum = data.extractedChecksum;
     const verified =
-      checksum === undefined
+      checksum === undefined || !this.#verifyChecksums
         ? new PassThrough()
         : new ChecksumVerifier(entry.path, checksum);
     // Decoder errors become tagged failures; cancellation stays tagged.

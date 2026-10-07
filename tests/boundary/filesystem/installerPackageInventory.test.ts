@@ -114,8 +114,44 @@ describe("installer package inventory", () => {
       await runProviderAnalysis(path, "inventory_artifact", {}),
     ).toMatchObject({
       error: "Analysis failed",
-      details: { reason: "integrity" },
+      code: "artifact_integrity_mismatch",
+      details: { logical_path: "App.pkg/PackageInfo", declared_sha256: null },
     });
+  });
+
+  it("records a xar checksum mismatch under record-and-continue", async () => {
+    const directory = await createTestTempDirectory("rea-pkg-recorded-");
+    const path = join(directory, "Installer.pkg");
+    await writeFile(path, productPackage("<plist/>", "0".repeat(40)));
+    const inventory = artifactInventoryResultSchema.parse(
+      parseEvidence(
+        await runProviderAnalysis(path, "inventory_artifact", {
+          integrity_policy: "record-and-continue",
+        }),
+      ).normalized_result,
+    );
+    const info = inventory.occurrences.find(
+      ({ logical_path: logical }) => logical === "App.pkg/PackageInfo",
+    );
+    const observedSha1 = createHash("sha1")
+      .update('<pkg-info identifier="com.example.app"/>')
+      .digest("hex");
+    expect(info).toMatchObject({ hash_status: "mismatched" });
+    expect(info?.limitations).toContain(
+      `Declared sha1 ${"0".repeat(40)} disagrees with observed ${observedSha1}.`,
+    );
+    expect(inventory.limitations).toContainEqual(
+      expect.stringContaining(
+        "1 member(s) disagree with a declared non-SHA-256 checksum",
+      ),
+    );
+    // Untampered members are still inventoried and expanded.
+    expect(
+      inventory.occurrences.some(
+        ({ logical_path: logical }) =>
+          logical === "App.pkg/Scripts/postinstall",
+      ),
+    ).toBe(true);
   });
 
   it("records an unresolved hard link as unavailable instead of empty", async () => {

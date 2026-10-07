@@ -272,6 +272,39 @@ describe("installer package reader hardening", () => {
   });
 });
 
+describe("cpio symlink targets", () => {
+  it("streams past an oversized symlink target and keeps reading", async () => {
+    const reader = new CpioArtifactReader(() =>
+      Promise.resolve(
+        Readable.from([
+          gzipCpio(
+            [
+              { name: "./huge", mode: MODE.symlink, data: "x".repeat(4097) },
+              { name: "./after", mode: MODE.file, data: "after" },
+            ],
+            "crc",
+          ),
+        ]),
+      ),
+    );
+    try {
+      const entries = await collect(reader);
+      expect(
+        entries.map(({ kind, path, limitations }) => [kind, path, limitations]),
+      ).toEqual([
+        [
+          "symlink",
+          "huge",
+          ["Symlink target of 4097 bytes exceeds 4096 bytes and was not read."],
+        ],
+        ["file", "after", []],
+      ]);
+    } finally {
+      await reader.close();
+    }
+  });
+});
+
 describe("cpio hard links and CRC archives", () => {
   const readAll = async (archive: Uint8Array) => {
     const reader = new CpioArtifactReader(() =>

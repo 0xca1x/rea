@@ -13,6 +13,8 @@ const MAX_NAME_BYTES = 64 * 1024;
 /** Hard-link bytes are buffered to serve every linked path, within these bounds. */
 const MAX_LINK_BUFFER_BYTES = 16 * 1024 * 1024;
 const MAX_LINK_BUFFER_TOTAL = 64 * 1024 * 1024;
+/** Longest symlink target read; PATH_MAX is 1024 on macOS and 4096 on Linux. */
+const MAX_SYMLINK_TARGET_BYTES = 4096;
 const TRAILER = "TRAILER!!!";
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
@@ -278,14 +280,22 @@ export class CpioArtifactReader implements ArtifactReader {
     const type = header.mode & S_IFMT;
     const path = memberPath(raw);
     if (type === S_IFLNK) {
-      const target = await this.#collect(source, header, raw);
+      // A hostile header can declare a multi-gigabyte target; stream it past.
+      let target: Buffer | undefined;
+      if (header.fileSize > MAX_SYMLINK_TARGET_BYTES)
+        await drain(this.#verified(source, header, raw));
+      else target = await this.#collect(source, header, raw);
       if (path !== undefined)
         yield entryOf({
           path,
           kind: "symlink",
           key,
           header,
-          limitations: [`Symlink target: ${target.toString("utf8")}`],
+          limitations: [
+            target === undefined
+              ? `Symlink target of ${header.fileSize} bytes exceeds ${MAX_SYMLINK_TARGET_BYTES} bytes and was not read.`
+              : `Symlink target: ${target.toString("utf8")}`,
+          ],
         });
       return;
     }

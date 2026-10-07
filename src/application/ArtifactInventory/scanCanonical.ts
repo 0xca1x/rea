@@ -45,7 +45,10 @@ export const scanCanonicalArtifactInventory = async (
   const rootDigest = metadata.isDirectory()
     ? null
     : await hashReadable(createReadStream(path), options.signal);
-  const reader = await createReader(path, rootFormat, options.signal);
+  // The scan applies the integrity policy to declared member checksums.
+  const reader = await createReader(path, rootFormat, options.signal, {
+    callerVerifiesChecksums: true,
+  });
 
   try {
     const { nodes, occurrences, pendingContradictions } = await scanReader(
@@ -148,7 +151,14 @@ const buildInventorySnapshot = async (
     edges: orderedEdges,
     provenance: reader?.provenance() ?? [],
     integrity_contradictions: integrityContradictions,
-    limitations: buildLimitations(rootFormat, reader, integrityContradictions),
+    limitations: buildLimitations(
+      rootFormat,
+      reader,
+      integrityContradictions,
+      input.occurrences.filter(
+        ({ hash_status: status }) => status === "mismatched",
+      ).length,
+    ),
   };
 };
 
@@ -261,11 +271,22 @@ const buildLimitations = (
   rootFormat: ArtifactNode["format"],
   reader: ArtifactReader | undefined,
   integrityContradictions: readonly IntegrityContradiction[],
-): string[] => [
-  ...inventoryLimitations(rootFormat, reader),
-  ...(integrityContradictions.length === 0
-    ? []
-    : [
-        `${String(integrityContradictions.length)} integrity contradiction(s) were recorded; mismatched content is observed-untrusted.`,
-      ]),
-];
+  mismatchedOccurrences: number,
+): string[] => {
+  // integrity_contradictions carry SHA-256 values; other declared checksums
+  // (xar SHA-1/MD5) are recorded on their occurrences.
+  const checksumOnly = mismatchedOccurrences - integrityContradictions.length;
+  return [
+    ...inventoryLimitations(rootFormat, reader),
+    ...(integrityContradictions.length === 0
+      ? []
+      : [
+          `${String(integrityContradictions.length)} integrity contradiction(s) were recorded; mismatched content is observed-untrusted.`,
+        ]),
+    ...(checksumOnly <= 0
+      ? []
+      : [
+          `${String(checksumOnly)} member(s) disagree with a declared non-SHA-256 checksum; their occurrences are mismatched and name the declared and observed values.`,
+        ]),
+  ];
+};

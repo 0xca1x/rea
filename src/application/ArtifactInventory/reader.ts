@@ -11,6 +11,8 @@ export const createReader = async (
   path: string,
   format: ArtifactNode["format"],
   signal?: AbortSignal,
+  /** The caller verifies declared member checksums itself (inventory scans do). */
+  options: { readonly callerVerifiesChecksums?: boolean } = {},
 ): Promise<ArtifactReader | undefined> => {
   switch (format) {
     case "directory":
@@ -24,7 +26,9 @@ export const createReader = async (
     case "asar":
       return new AsarArtifactReader(path);
     case "pkg":
-      return new XarArtifactReader(path);
+      return new XarArtifactReader(path, {
+        verifyChecksums: options.callerVerifiesChecksums !== true,
+      });
     case "mach-o-universal":
       return process.platform === "darwin"
         ? new MachOSliceArtifactReader(path)

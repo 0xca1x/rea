@@ -9,6 +9,8 @@ export type HashResult = {
   readonly sha256: string;
   readonly bytes: number;
   readonly prefix: Buffer;
+  /** Digest in the additionally requested algorithm, when one was requested. */
+  readonly also?: string;
 };
 
 /** Bounded classification evidence; this is not an executable format size limit. */
@@ -27,8 +29,11 @@ export const abortIfNeeded = (signal?: AbortSignal): void => {
 export const hashReadable = async (
   stream: Readable,
   signal?: AbortSignal,
+  alsoAlgorithm?: string,
 ): Promise<HashResult> => {
   const hash = createHash("sha256");
+  const also =
+    alsoAlgorithm === undefined ? undefined : createHash(alsoAlgorithm);
   const prefixes: Buffer[] = [];
   let prefixBytes = 0;
   let bytes = 0;
@@ -37,6 +42,7 @@ export const hashReadable = async (
     const chunk = streamChunkToBuffer(raw);
     bytes += chunk.length;
     hash.update(chunk);
+    also?.update(chunk);
     if (prefixBytes < ARTIFACT_CLASSIFICATION_PREFIX_BYTES) {
       const selected = chunk.subarray(
         0,
@@ -46,5 +52,10 @@ export const hashReadable = async (
       prefixBytes += selected.length;
     }
   }
-  return { sha256: hash.digest("hex"), bytes, prefix: Buffer.concat(prefixes) };
+  return {
+    sha256: hash.digest("hex"),
+    bytes,
+    prefix: Buffer.concat(prefixes),
+    ...(also === undefined ? {} : { also: also.digest("hex") }),
+  };
 };
