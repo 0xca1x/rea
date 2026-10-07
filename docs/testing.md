@@ -61,6 +61,16 @@ needed, exercise the actual target through browser, Electron, or process
 capture. Real model trials are manual; Vitest covers deterministic evaluator
 logic.
 
+`verify:managed` runs the portable PE byte-fixture conformance entrypoint under
+`scripts/verify/managed/`, with its byte builder under
+`scripts/fixtures/managed/`. It checks static classification, members,
+reconstruction, native-boundary relationships and application graphs without
+executing fixture PE files. Operator-local manifests and actual ILSpy oracles
+remain optional, separately reported checks; the real Ghidra NativeAOT lane has
+its own toolchain prerequisites. See [the managed guide](managed-code-analysis.md)
+for those configurations. Generated completion-ledger checks use the same owning
+entrypoint and include its verifier/fixture files in their cache inputs.
+
 ## End-to-end, integration and golden evidence
 
 Full E2E tests invoke the production command dispatcher and real providers,
@@ -335,8 +345,8 @@ CI exercises the pinned Node.js runtime on native hosted runners:
 | --------------------- | ------------------ | ---------------------------------------------------------------------------------------- |
 | Linux x64             | `ubuntu-latest`    | Installed package and real Node Inspector CLI/MCP                                        |
 | Linux arm64 (aarch64) | `ubuntu-24.04-arm` | Installed package and real Node Inspector CLI/MCP                                        |
-| macOS arm64           | `macos-14`         | Installed package and real Node Inspector CLI/MCP                                        |
-| macOS x64             | `macos-15-intel`   | Installed package and real Node Inspector CLI/MCP                                        |
+| macOS 15 arm64        | `macos-15`         | Installed package and real Node Inspector CLI/MCP                                        |
+| macOS 15 x64          | `macos-15-intel`   | Installed package and real Node Inspector CLI/MCP                                        |
 | Windows x64           | `windows-latest`   | Curated capabilities, native controls, installed package and real Node Inspector CLI/MCP |
 
 Package and Inspector matrices assert the actual Node platform/architecture
@@ -345,6 +355,11 @@ runs at most two jobs concurrently with explicit timeouts and Node heap/thread
 limits. Package checks cover installation, CLI/MCP discovery, target-free
 analysis, configuration backups/recovery, Evidence and owned lifecycle; Inspector
 checks execute source-owned loopback targets and special filename cases.
+
+macOS uses one OS version with one native baseline job per architecture. Each job
+runs package and Inspector checks after a single dependency installation. The
+separate Inspector matrix covers Linux and Windows; Apple artifact checks retain
+their own macOS 15 arm64 job for Xcode-dependent workflows.
 
 These native baseline checks complement the Linux source-test shards and the
 separate Apple-artifact and real-provider lanes. Actual Hopper, Ghidra, IDA,
@@ -456,17 +471,24 @@ that explicit lane, not the routine iteration requirement.
 
 ## Apple native metadata and UI
 
-`npm run verify:apple-dispatch` compiles Objective-C class/protocol and Swift
-conformance/vtable fixtures, inspects their bytes and repeats after stripping
-local symbols. It requires macOS and the host Xcode toolchain; targets are not
-executed. `npm run verify:native-ui` launches exactly one source-owned fixture
-window and requires successful selected-window capture and selected actions.
-An OS permission denial fails the positive lane. `npm run verify:native-ui:permissions`
-allows a host-permission-boundary-only result and explicitly reports
-`positive_e2e: false`; it must not be reported as capture/action proof.
-Both commands reject a changed executable digest and clean up the fixture
-process and helper. These lanes require an interactive macOS desktop. See [native investigation](native-investigation.md)
-for the exact ABI, authority, graph and observation boundaries.
+`npm run verify:apple-dispatch` compiles the Objective-C fixture (classes,
+protocols, a property and an `NSString` category) and the Swift
+conformance/vtable fixture.
+
+- Each fixture is linked with legacy `LC_DYLD_INFO` binds and with chained
+  fixups; on Apple silicon the ObjC fixture is also built as arm64e, which uses
+  authenticated pointers.
+- The lane inspects the bytes and repeats after stripping local symbols.
+- It requires the bound `NSObject` superclass, the external category, and the
+  matching `pointer_fixups` coverage. It requires macOS and the host Xcode toolchain; targets are not
+  executed. `npm run verify:native-ui` launches exactly one source-owned fixture
+  window and requires successful selected-window capture and selected actions.
+  An OS permission denial fails the positive lane. `npm run verify:native-ui:permissions`
+  allows a host-permission-boundary-only result and explicitly reports
+  `positive_e2e: false`; it must not be reported as capture/action proof.
+  Both commands reject a changed executable digest and clean up the fixture
+  process and helper. These lanes require an interactive macOS desktop. See [native investigation](native-investigation.md)
+  for the exact ABI, authority, graph and observation boundaries.
 
 ### Firmware adapters
 
