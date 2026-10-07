@@ -93,7 +93,7 @@ Keep tool catalogs complete and self-describing; prefer capability- and session-
 
 ## Cursor Cloud specific instructions
 
-Development requires Node.js 24.18.0 and npm 11.16.0 (`.nvmrc` and `packageManager`). The Cloud Agent image places an older `node` on `PATH` ahead of a normal install. Environment setup installs the pinned toolchain under `/usr/local` and prepends `/usr/local/bin` for login shells. Confirm `node -v` is `v24.18.0` before installing dependencies.
+Development requires Node.js 24.18.0 and npm 11.16.0 (`.nvmrc` and `packageManager`). The Cloud Agent image places an older `node` on `PATH` ahead of a normal install. `.cursor/cloud-agent-install.sh` installs that toolchain under `/usr/local` and prepends `/usr/local/bin` for login shells. Confirm `node -v` is `v24.18.0` before installing dependencies.
 
 `npm ci` installs locked dependencies. `npm run build:cached` produces the CLI and MCP server. `npm run check:fast` is the pre-push typecheck and lint. Hopper, Ghidra, and IDA are optional bring-your-own providers. JavaScript analysis and the deterministic Vitest suites do not need them. `rea doctor` reports those engines as missing until they are configured.
 
