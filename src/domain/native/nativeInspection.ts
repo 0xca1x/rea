@@ -6,7 +6,7 @@ import {
   signatureVerificationSchema,
   stapledTicketSchema,
 } from "./codeSigningPosture.js";
-import { jsonValueSchema } from "./jsonValue.js";
+import { jsonValueSchema } from "../jsonValue.js";
 
 const hexAddress = z.string().regex(/^0x[a-fA-F0-9]+$/u);
 const coverage = <Schema extends z.ZodType>(item: Schema) =>

@@ -1,6 +1,6 @@
 import { z } from "zod";
 
-import type { JsonValue } from "./jsonValue.js";
+import type { JsonValue } from "../jsonValue.js";
 
 /** `SecCodeSignatureFlags` bits that codesign reports in a CodeDirectory. */
 const CODE_DIRECTORY_FLAGS: readonly (readonly [number, string])[] = [

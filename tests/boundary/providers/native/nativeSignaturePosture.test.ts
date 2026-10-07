@@ -7,7 +7,7 @@ import { describe, expect, it } from "vitest";
 import { NativeMacOSProvider } from "../../../../src/native/NativeMacOSProvider.js";
 import { AnalysisCancelledError } from "../../../../src/domain/analysisErrorCore.js";
 import { ok } from "../../../../src/domain/result.js";
-import { inspectSignatureSchema } from "../../../../src/domain/nativeInspection.js";
+import { inspectSignatureSchema } from "../../../../src/domain/native/nativeInspection.js";
 import { createTestTempDirectory } from "../../../fixtures/temporaryDirectory.js";
 import {
   NativeFixtureRunner as FixtureRunner,

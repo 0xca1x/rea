@@ -1,11 +1,11 @@
 import {
   codeDirectoryFlagNames,
   type CodeDirectory,
-} from "../../domain/codeSigningPosture.js";
+} from "../../domain/native/codeSigningPosture.js";
 import {
   inspectSignatureSchema,
   type InspectSignature,
-} from "../../domain/nativeInspection.js";
+} from "../../domain/native/nativeInspection.js";
 
 /**
  * Parse bounded `codesign -d --verbose=4` diagnostics, which Apple emits on

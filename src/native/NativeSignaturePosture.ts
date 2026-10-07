@@ -3,7 +3,7 @@ import { constants } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 
-import type { InspectSignature } from "../domain/nativeInspection.js";
+import type { InspectSignature } from "../domain/native/nativeInspection.js";
 import type { NativeCommandCapture } from "./CommandRunner.js";
 
 /** Notarization tickets are a few kilobytes; larger files are hashed in chunks. */
