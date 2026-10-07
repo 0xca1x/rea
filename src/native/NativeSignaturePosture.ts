@@ -13,10 +13,18 @@ const HASH_CHUNK_BYTES = 64 * 1024;
 export const signedCodePath = (target: {
   readonly path: string;
   readonly sourcePath?: string;
-}): string =>
-  target.sourcePath?.toLowerCase().endsWith(".app") === true
-    ? target.sourcePath
-    : target.path;
+  readonly bundleInfoPlist?: string;
+}): string => appBundle(target) ?? target.path;
+
+/**
+ * The app bundle directory a target was opened from. Only a bundle opened as a
+ * directory carries its Info.plist; a regular file named `X.app` is not one.
+ */
+const appBundle = (target: {
+  readonly sourcePath?: string;
+  readonly bundleInfoPlist?: string;
+}): string | undefined =>
+  target.bundleInfoPlist === undefined ? undefined : target.sourcePath;
 
 /**
  * Project a local `codesign --verify --strict` capture without reinterpreting
@@ -59,11 +67,11 @@ export const signatureVerification = (
  * Apple's notarization record are not checked, because that needs the network.
  */
 export const stapledTicket = async (
-  target: { readonly sourcePath?: string },
+  target: { readonly sourcePath?: string; readonly bundleInfoPlist?: string },
   signal?: AbortSignal,
 ): Promise<InspectSignature["stapled_ticket"]> => {
-  const bundle = target.sourcePath;
-  if (bundle?.toLowerCase().endsWith(".app") !== true)
+  const bundle = appBundle(target);
+  if (bundle === undefined)
     return {
       status: "not-applicable",
       path: null,

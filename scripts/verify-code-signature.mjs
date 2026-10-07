@@ -131,6 +131,12 @@ try {
   assert.notEqual(platform.code_directory.platform_identifier, null);
   assert.equal(platform.verification.status, "valid");
   assert.equal(facets(platform)["library-validation"], "enforced");
+  // The platform rules rest on a real `anchor apple` requirement check.
+  assert.ok(
+    platform.provenance.some(({ command }) =>
+      command.includes("-R=anchor apple"),
+    ),
+  );
 
   // Only deep verification sees a file added inside nested code.
   const nested = join(root, "Nested.app");

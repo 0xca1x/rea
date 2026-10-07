@@ -195,6 +195,10 @@ class NativeMacOSClient implements AnalysisClient {
           )
         : observation;
     } catch (cause: unknown) {
+      if (cause instanceof AnalysisError) return err(cause);
+      // A helper that observed the abort escapes as a DOMException.
+      if (options?.signal?.aborted)
+        return err(new AnalysisCancelledError(operation));
       return err(
         new AnalysisOutputError(operation, "Native output parsing failed", {
           cause,
@@ -351,6 +355,23 @@ class NativeMacOSClient implements AnalysisClient {
       entitlements.value,
       verify.value,
     ];
+    // A platform identifier means a platform binary only in Apple's own
+    // signatures, which satisfy `anchor apple`; Developer ID code does not.
+    let appleOrigin = false;
+    if (
+      !unsigned &&
+      (parsed.code_directory?.platform_identifier ?? null) !== null
+    ) {
+      const anchor = await this.#run(
+        "inspect_signature",
+        "codesign",
+        ["--verify", "-R=anchor apple", verifyPath],
+        { signal, acceptNonZero: true },
+      );
+      if (!anchor.ok) return anchor;
+      captures.push(anchor.value);
+      appleOrigin = anchor.value.exitCode === 0;
+    }
     const limitations = [
       ...parsed.limitations,
       ...SIGNATURE_POSTURE_LIMITATIONS,
@@ -391,6 +412,8 @@ class NativeMacOSClient implements AnalysisClient {
         codeDirectory: parsed.code_directory,
         entitlements: entitlementValue.value,
         entitlementsKnown: unsigned || entitlements.value.exitCode === 0,
+        mixedSlices: mixedSigning,
+        appleOrigin,
       }),
       provenance,
       limitations,

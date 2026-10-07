@@ -24,6 +24,13 @@ const directory = (
   executable_segment_flags: 1,
 });
 
+type PostureInput = Parameters<typeof deriveSecurityFacets>[0];
+
+const derive = (
+  input: Omit<PostureInput, "mixedSlices" | "appleOrigin"> &
+    Partial<PostureInput>,
+) => deriveSecurityFacets({ mixedSlices: false, appleOrigin: false, ...input });
+
 const states = (facets: ReturnType<typeof deriveSecurityFacets>) =>
   Object.fromEntries(facets.map(({ facet, state }) => [facet, state]));
 
@@ -47,7 +54,7 @@ describe("derived security facets", () => {
     for (const signed of [false, true])
       expect(
         states(
-          deriveSecurityFacets({
+          derive({
             signed,
             codeDirectory: signed ? directory(0x2) : null,
             entitlements: null,
@@ -66,7 +73,7 @@ describe("derived security facets", () => {
   it("restricts hardened-runtime code unless entitlements relax it", () => {
     expect(
       states(
-        deriveSecurityFacets({
+        derive({
           signed: true,
           codeDirectory: directory(RUNTIME),
           entitlements: { "com.apple.security.app-sandbox": true },
@@ -80,7 +87,7 @@ describe("derived security facets", () => {
       "executable-memory": "restricted",
       "app-sandbox": "sandboxed",
     });
-    const relaxed = deriveSecurityFacets({
+    const relaxed = derive({
       signed: true,
       codeDirectory: directory(RUNTIME),
       entitlements: {
@@ -104,7 +111,7 @@ describe("derived security facets", () => {
   });
 
   it("lets explicit flags and platform identity override entitlements", () => {
-    const flagged = deriveSecurityFacets({
+    const flagged = derive({
       signed: true,
       codeDirectory: directory(0x2000 | 0x800 | RUNTIME),
       entitlements: {
@@ -118,11 +125,12 @@ describe("derived security facets", () => {
     });
     expect(
       states(
-        deriveSecurityFacets({
+        derive({
           signed: true,
           codeDirectory: directory(RUNTIME, 26),
           entitlements: null,
           entitlementsKnown: true,
+          appleOrigin: true,
         }),
       ),
     ).toMatchObject({
@@ -131,11 +139,48 @@ describe("derived security facets", () => {
       "debugger-attach": "blocked",
     });
   });
+});
+
+describe("security facets that need more than one CodeDirectory", () => {
+  it("applies platform policy only to Apple-signed platform identifiers", () => {
+    const crafted = derive({
+      signed: true,
+      codeDirectory: directory(0, 26),
+      entitlements: null,
+      entitlementsKnown: true,
+    });
+    expect(states(crafted)).toMatchObject({
+      "library-validation": "unknown",
+      "dyld-environment-variables": "unknown",
+      "debugger-attach": "unknown",
+    });
+    expect(crafted[0]?.evidence).toEqual([
+      "platform identifier",
+      "Apple origin not verified",
+    ]);
+  });
+
+  it("leaves every facet unknown when slices differ in signing state", () => {
+    const mixed = derive({
+      signed: true,
+      codeDirectory: directory(0x2000 | RUNTIME, 26),
+      entitlements: null,
+      entitlementsKnown: false,
+      appleOrigin: true,
+      mixedSlices: true,
+    });
+    expect(new Set(mixed.map(({ state }) => state))).toEqual(
+      new Set(["unknown"]),
+    );
+    expect(mixed[0]?.evidence).toEqual([
+      "architecture slices differ in signing state",
+    ]);
+  });
 
   it("keeps facets unknown when flags or entitlements are unavailable", () => {
     expect(
       states(
-        deriveSecurityFacets({
+        derive({
           signed: true,
           codeDirectory: directory(RUNTIME),
           entitlements: null,
@@ -151,7 +196,7 @@ describe("derived security facets", () => {
     });
     expect(
       states(
-        deriveSecurityFacets({
+        derive({
           signed: true,
           codeDirectory: directory(null),
           entitlements: null,

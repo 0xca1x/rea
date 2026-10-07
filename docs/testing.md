@@ -86,7 +86,7 @@ copies of a clang-built fixture with real `codesign`: ad hoc, hardened
 runtime, hardened runtime with relaxing entitlements, and `library,restrict`
 flags. It checks that `inspect-signature` decodes those flags and derives the
 expected security facets. It also checks a platform binary, which must report a
-platform identifier, and bundles with an added unsealed file, at the top level
+platform identifier and pass the `anchor apple` origin check, and bundles with an added unsealed file, at the top level
 and inside a nested XPC service, which must fail deep strict verification. CLI and stdio MCP results must match.
 `verify:macos-bundle` needs only macOS with Command Line Tools. It compiles a
 source-owned app with `clang`: a versioned framework, XPC services, an app

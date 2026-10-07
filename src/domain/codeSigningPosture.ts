@@ -146,7 +146,29 @@ interface PostureInput {
   readonly entitlements: JsonValue | null;
   /** False when mixed or unreadable signing states hide the aggregate entitlements. */
   readonly entitlementsKnown: boolean;
+  /** Architecture slices differ in signing state, so no one CodeDirectory describes the process. */
+  readonly mixedSlices: boolean;
+  /**
+   * The signature satisfies `anchor apple`. Only then does a CodeDirectory
+   * platform identifier mean an Apple platform binary.
+   */
+  readonly appleOrigin: boolean;
 }
+
+/** Whether the CodeDirectory claims a platform binary, and whether Apple signed it. */
+const platformBinary = (
+  input: PostureInput,
+): "apple" | "unverified" | "none" =>
+  (input.codeDirectory?.platform_identifier ?? null) === null
+    ? "none"
+    : input.appleOrigin
+      ? "apple"
+      : "unverified";
+
+const UNVERIFIED_PLATFORM = [
+  "platform identifier",
+  "Apple origin not verified",
+] as const;
 
 const has = (input: PostureInput, flag: string): boolean =>
   input.codeDirectory?.flags?.names.includes(flag) === true;
@@ -169,13 +191,21 @@ const libraryValidation = (input: PostureInput): SecurityFacet => {
       evidence: ["CodeDirectory flags unavailable"],
       explanation,
     };
-  if (input.codeDirectory.platform_identifier !== null)
-    return {
-      ...base,
-      state: "enforced",
-      evidence: ["platform binary"],
-      explanation,
-    };
+  const platform = platformBinary(input);
+  if (platform !== "none")
+    return platform === "apple"
+      ? {
+          ...base,
+          state: "enforced",
+          evidence: ["platform binary"],
+          explanation,
+        }
+      : {
+          ...base,
+          state: "unknown",
+          evidence: [...UNVERIFIED_PLATFORM],
+          explanation,
+        };
   if (has(input, "library-validation"))
     return {
       ...base,
@@ -232,13 +262,21 @@ const dyldEnvironment = (input: PostureInput): SecurityFacet => {
       evidence: ["CodeDirectory flag restrict"],
       explanation,
     };
-  if ((input.codeDirectory?.platform_identifier ?? null) !== null)
-    return {
-      ...base,
-      state: "ignored",
-      evidence: ["platform binary"],
-      explanation,
-    };
+  const platform = platformBinary(input);
+  if (platform !== "none")
+    return platform === "apple"
+      ? {
+          ...base,
+          state: "ignored",
+          evidence: ["platform binary"],
+          explanation,
+        }
+      : {
+          ...base,
+          state: "unknown",
+          evidence: [...UNVERIFIED_PLATFORM],
+          explanation,
+        };
   if (!has(input, "runtime"))
     return input.signed && (input.codeDirectory?.flags ?? null) === null
       ? {
@@ -296,13 +334,21 @@ const debuggerAttach = (input: PostureInput): SecurityFacet => {
       evidence: ["com.apple.security.get-task-allow"],
       explanation,
     };
-  if ((input.codeDirectory?.platform_identifier ?? null) !== null)
-    return {
-      ...base,
-      state: "blocked",
-      evidence: ["platform binary"],
-      explanation,
-    };
+  const platform = platformBinary(input);
+  if (platform !== "none")
+    return platform === "apple"
+      ? {
+          ...base,
+          state: "blocked",
+          evidence: ["platform binary"],
+          explanation,
+        }
+      : {
+          ...base,
+          state: "unknown",
+          evidence: [...UNVERIFIED_PLATFORM],
+          explanation,
+        };
   if (has(input, "runtime"))
     return input.entitlementsKnown
       ? {
@@ -411,10 +457,21 @@ const appSandbox = (input: PostureInput): SecurityFacet => {
 };
 
 /** Derive launch-time security facets from observed flags and entitlements. */
-export const deriveSecurityFacets = (input: PostureInput): SecurityFacet[] => [
-  libraryValidation(input),
-  dyldEnvironment(input),
-  debuggerAttach(input),
-  executableMemory(input),
-  appSandbox(input),
-];
+export const deriveSecurityFacets = (input: PostureInput): SecurityFacet[] => {
+  const facets = [
+    libraryValidation(input),
+    dyldEnvironment(input),
+    debuggerAttach(input),
+    executableMemory(input),
+    appSandbox(input),
+  ];
+  // Each slice runs under its own signature; the inspected one does not
+  // describe an unsigned slice of the same file.
+  return input.mixedSlices
+    ? facets.map((facet) => ({
+        ...facet,
+        state: "unknown" as const,
+        evidence: ["architecture slices differ in signing state"],
+      }))
+    : facets;
+};

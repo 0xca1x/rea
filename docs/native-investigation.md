@@ -33,7 +33,13 @@ explicit limitation; architecture inventory locations remain available.
     - executable-memory policy;
     - App Sandbox.
 
-    System Integrity Protection, AMFI and setuid policy are not evaluated.
+    A CodeDirectory platform identifier counts as a platform binary only
+    when the signature also satisfies `anchor apple` (Apple's own code;
+    `codesign --verify -R="anchor apple"`). Otherwise the facets that depend
+    on it are `unknown`. A universal file whose slices differ in signing
+    state reports every facet as `unknown`, because no one CodeDirectory
+    describes the process. System Integrity Protection, AMFI and setuid
+    policy are not evaluated.
 - `inspect_asset_catalog` / `rea inspect-asset-catalog <app>` reads compiled
   `Assets.car` metadata through macOS `assetutil --info`. Catalog digests, raw
   rendition fields, pagination and exact UI resource-name matches are returned.

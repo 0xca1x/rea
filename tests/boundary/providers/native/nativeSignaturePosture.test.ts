@@ -5,6 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 
 import { NativeMacOSProvider } from "../../../../src/native/NativeMacOSProvider.js";
+import { AnalysisCancelledError } from "../../../../src/domain/analysisErrorCore.js";
 import { ok } from "../../../../src/domain/result.js";
 import { inspectSignatureSchema } from "../../../../src/domain/nativeInspection.js";
 import { createTestTempDirectory } from "../../../fixtures/temporaryDirectory.js";
@@ -177,6 +178,68 @@ describe("native signature posture", () => {
   });
 });
 
+describe("native signature posture boundaries", () => {
+  it("treats a regular file named .app as a bare Mach-O", async () => {
+    const directory = await createTestTempDirectory("rea-signature-file-");
+    const executable = join(directory, "Tool.app");
+    await writeFile(executable, "fixture");
+    const signature = await new NativeMacOSProvider(
+      new FixtureRunner(),
+      "darwin",
+    )
+      .createClient({ ...machoTarget(executable), sourcePath: executable })
+      .execute("inspect_signature", {});
+    expect(signature.ok && signature.value.result).toMatchObject({
+      verification: { path: executable },
+      stapled_ticket: { status: "not-applicable" },
+    });
+  });
+
+  it("applies platform policy only after the signature satisfies anchor apple", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const facets = async (anchorExit: number) => {
+      const signature = await new NativeMacOSProvider(
+        new PlatformRunner(anchorExit),
+        "darwin",
+      )
+        .createClient(machoTarget(executable, app))
+        .execute("inspect_signature", {});
+      if (!signature.ok) throw signature.error;
+      const result = inspectSignatureSchema.parse(signature.value.result);
+      expect(result.provenance.map(({ command }) => command.at(-2))).toContain(
+        "-R=anchor apple",
+      );
+      return Object.fromEntries(
+        result.security_facets.map(({ facet, state }) => [facet, state]),
+      );
+    };
+    expect(await facets(0)).toMatchObject({
+      "library-validation": "enforced",
+      "dyld-environment-variables": "ignored",
+      "debugger-attach": "blocked",
+    });
+    expect(await facets(3)).toMatchObject({
+      "library-validation": "unknown",
+      "dyld-environment-variables": "unknown",
+      "debugger-attach": "unknown",
+    });
+  });
+
+  it("reports cancellation while hashing the stapled ticket", async () => {
+    const { app, executable } = await fixtureApp("ticket");
+    const controller = new AbortController();
+    const signature = await new NativeMacOSProvider(
+      new AbortAfterVerifyRunner(controller),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {}, { signal: controller.signal });
+    expect(signature.ok).toBe(false);
+    if (signature.ok) return;
+    expect(signature.error).toBeInstanceOf(AnalysisCancelledError);
+  });
+});
+
 /** A signed bundle whose nested helper is unsigned. */
 class UnsignedNestedRunner extends FixtureRunner {
   override async run(tool: string, arguments_: readonly string[]) {
@@ -192,5 +255,39 @@ class UnsignedNestedRunner extends FixtureRunner {
       stderrBytes: Buffer.byteLength(stderr),
       exitCode: 1,
     });
+  }
+}
+
+/** A platform binary whose `anchor apple` requirement check exits as given. */
+class PlatformRunner extends FixtureRunner {
+  constructor(private readonly anchorExit: number) {
+    super();
+  }
+
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || tool !== "codesign") return result;
+    if (arguments_.includes("-R=anchor apple"))
+      return ok({ ...result.value, exitCode: this.anchorExit });
+    if (!arguments_.includes("--verbose=4")) return result;
+    const stderr = `${result.value.stderr}Platform identifier=26\n`;
+    return ok({
+      ...result.value,
+      stderr,
+      stderrBytes: Buffer.byteLength(stderr),
+    });
+  }
+}
+
+/** Cancel the request once local verification has finished. */
+class AbortAfterVerifyRunner extends FixtureRunner {
+  constructor(private readonly controller: AbortController) {
+    super();
+  }
+
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (arguments_[0] === "--verify") this.controller.abort();
+    return result;
   }
 }
