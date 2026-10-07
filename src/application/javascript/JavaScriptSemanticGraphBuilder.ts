@@ -58,6 +58,8 @@ interface BuilderInput {
     "graph_id" | "nodes"
   >;
   readonly analysis: JavaScriptArtifactAnalysis;
+  /** Source facts the semantic graph inherits, such as integrity contradictions. */
+  readonly sourceLimitations?: readonly string[];
 }
 
 interface FileContext extends SemanticFlowProjectionContext {
@@ -79,6 +81,7 @@ export const buildJavaScriptSemanticGraph = ({
   rootArtifactSha256,
   applicationGraph,
   analysis,
+  sourceLimitations = [],
 }: BuilderInput): JavaScriptSemanticGraph => {
   const state = emptyState(applicationGraph);
   const fingerprints: JavaScriptSemanticGraph["fingerprints"][number][] = [];
@@ -119,6 +122,7 @@ export const buildJavaScriptSemanticGraph = ({
       })),
     },
     limitations: [
+      ...sourceLimitations,
       "The semantic graph contains static syntax observations and conservative relationship candidates; it does not claim runtime execution.",
       "Local data flow does not claim control-flow-sensitive reaching definitions or arbitrary dynamic property resolution.",
       "Promise ownership covers explicit unshadowed Promise construction, static factories, aggregation, chaining, and await syntax only.",

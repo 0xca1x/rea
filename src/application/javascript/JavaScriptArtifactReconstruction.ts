@@ -12,7 +12,10 @@ import type { ElectronBoundarySummary } from "../../domain/javascriptApplication
 import type { IntegrityContradiction } from "../../domain/artifactGraph.js";
 import { analyzeJavaScriptArtifactFiles } from "./JavaScriptArtifactAnalysis.js";
 import { readJavaScriptArtifactFiles } from "./JavaScriptArtifactFiles.js";
-import { buildJavaScriptArtifactGraph } from "./JavaScriptArtifactGraphBuilder.js";
+import {
+  buildJavaScriptArtifactGraph,
+  integrityContradictionLimitations,
+} from "./JavaScriptArtifactGraphBuilder.js";
 import {
   javascriptArtifactReconstructionInputSchema,
   type JavaScriptArtifactReconstructionInput,
@@ -75,6 +78,7 @@ export const reconstructJavaScriptArtifact = async (
       rootArtifactSha256: snapshot.manifest.root_sha256,
       applicationGraph: graph,
       analysis,
+      sourceLimitations: integrityContradictionLimitations(snapshot),
     });
     return {
       input_path: path,

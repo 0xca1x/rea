@@ -130,7 +130,7 @@ export const analysisErrorUserMessage = (error: AnalysisError): string => {
     return error.reason === "integrity" &&
       error.artifactDetails !== undefined &&
       INTEGRITY_POLICY_OPERATIONS.has(error.operation)
-      ? "Artifact bytes contradict their declared integrity. If that is expected, such as an unpacked native module signed after packaging, rerun with integrity_policy record-and-continue to keep the mismatch as an untrusted contradiction; otherwise get a fresh copy."
+      ? "Artifact bytes contradict their declared integrity. If that is expected, such as an unpacked native module signed after packaging, rerun with the record-and-continue integrity policy (integrity_policy in MCP, --integrity-policy on the CLI) to keep the mismatch as an untrusted contradiction; otherwise get a fresh copy."
       : artifactMessage(error.reason);
   if (error instanceof EvidenceReferenceError)
     return error.reason === "missing"

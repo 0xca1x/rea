@@ -91,7 +91,7 @@ it.each([
 );
 
 const INTEGRITY_REMEDIATION =
-  "Artifact bytes contradict their declared integrity. If that is expected, such as an unpacked native module signed after packaging, rerun with integrity_policy record-and-continue to keep the mismatch as an untrusted contradiction; otherwise get a fresh copy.";
+  "Artifact bytes contradict their declared integrity. If that is expected, such as an unpacked native module signed after packaging, rerun with the record-and-continue integrity policy (integrity_policy in MCP, --integrity-policy on the CLI) to keep the mismatch as an untrusted contradiction; otherwise get a fresh copy.";
 
 const artifactInventoryResultSchema = z.object({
   occurrences: z.array(

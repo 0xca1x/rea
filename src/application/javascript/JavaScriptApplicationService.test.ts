@@ -8,6 +8,7 @@ import { z } from "zod";
 import { createTestTempDirectory } from "../../../tests/fixtures/temporaryDirectory.js";
 import { projectAnalysisError } from "../../domain/analysisErrorProjection.js";
 import { analyzeJavaScriptApplication } from "./JavaScriptApplicationService.js";
+import { compareApplicationVersionsEvidence } from "./JavaScriptApplicationWorkflowService.js";
 
 describe("JavaScript application failure diagnostics", () => {
   it("identifies the rejected result field in caller-visible diagnostics", async () => {
@@ -122,6 +123,9 @@ describe("JavaScript application failure diagnostics", () => {
   );
 });
 
+const CONTRADICTION_LIMITATION =
+  "Observed bytes of 1 artifact file(s) contradict declared integrity and are untrusted; contradicted nested archives were not expanded: addon.node.";
+
 describe("JavaScript application artifact integrity", () => {
   it("analyzes a signed-after-packaging native module only when the mismatch is recorded", async () => {
     const root = await createTestTempDirectory("rea-js-integrity-");
@@ -169,9 +173,27 @@ describe("JavaScript application artifact integrity", () => {
           trust: "observed-untrusted",
         },
       ],
-      limitations: expect.arrayContaining([
-        "1 artifact file(s) contradict declared integrity; their observed bytes are untrusted, and contradicted nested archives were not expanded.",
-      ]),
+      graph: { coverage: { status: "partial" } },
+      limitations: expect.arrayContaining([CONTRADICTION_LIMITATION]),
+      semantic_graph: {
+        limitations: expect.arrayContaining([CONTRADICTION_LIMITATION]),
+      },
+    });
+
+    // Workflows built on the recorded graph inherit its partial coverage.
+    const clean = await analyzeJavaScriptApplication({
+      input_path: source,
+      format: "directory",
+    });
+    if (!clean.ok) throw new Error("Expected clean analysis");
+    const comparison = compareApplicationVersionsEvidence({
+      left: clean.value,
+      right: recorded.value,
+    });
+    expect(comparison.ok).toBe(true);
+    if (!comparison.ok) throw new Error("Expected comparison");
+    expect(comparison.value.normalized_result).toMatchObject({
+      coverage: { status: "partial", right_graph_status: "partial" },
     });
   });
 });

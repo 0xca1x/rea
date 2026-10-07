@@ -92,6 +92,7 @@ const graphCoverage = (context: JavaScriptArtifactGraphContext) => {
       javascript !== null && javascript.parse_status === "partial",
   );
   const unknownGap =
+    context.snapshot.integrity_contradictions.length > 0 ||
     context.analysis.parse_failures > 0 ||
     context.fileSet.invalid_utf8_files > 0 ||
     sourceMapPolicyGap ||
@@ -102,6 +103,20 @@ const graphCoverage = (context: JavaScriptArtifactGraphContext) => {
   if (unknownGap) return partialApplicationCoverage([], null);
   return completeApplicationCoverage();
 };
+
+/**
+ * Disclose recorded integrity contradictions wherever the application graph
+ * is consumed; the graph is also partial, so comparisons and traces built on
+ * it do not claim completeness.
+ */
+export const integrityContradictionLimitations = (
+  snapshot: Pick<ArtifactInventorySnapshot, "integrity_contradictions">,
+): string[] =>
+  snapshot.integrity_contradictions.length === 0
+    ? []
+    : [
+        `Observed bytes of ${String(snapshot.integrity_contradictions.length)} artifact file(s) contradict declared integrity and are untrusted; contradicted nested archives were not expanded: ${snapshot.integrity_contradictions.map(({ logical_path: path }) => path).join(", ")}.`,
+      ];
 
 const graphLimitations = (
   context: JavaScriptArtifactGraphContext,
@@ -124,6 +139,7 @@ const graphLimitations = (
   );
   return [
     ...context.analysis.limitations,
+    ...integrityContradictionLimitations(context.snapshot),
     "CommonJS and ESM binding relationships were recovered from inert syntax and resolved only within the inventoried artifact container.",
     "Webpack/Rspack factories were recovered from AST literals; REA did not invoke push handlers or bundle bootstrap code.",
     "Static imports, entrypoints, workers, endpoints, and storage relationships do not prove runtime execution.",
