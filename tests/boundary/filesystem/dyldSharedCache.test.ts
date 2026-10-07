@@ -6,19 +6,19 @@ import { describe, expect, it } from "vitest";
 import {
   dyldCacheFixture,
   type CacheFixture,
-} from "../../../src/artifacts/DyldSharedCache.fixture.js";
+} from "../../../src/artifacts/apple/DyldSharedCache.fixture.js";
 import {
   FILE_TYPE,
   LC,
   dylibCommand,
   dylibUseCommand,
   machoImage,
-} from "../../../src/artifacts/MachoImage.fixture.js";
+} from "../../../src/artifacts/apple/MachoImage.fixture.js";
 import {
   inspectDyldSharedCache,
   inspectDyldSharedCacheEvidence,
-} from "../../../src/application/DyldSharedCacheService.js";
-import { dyldSharedCacheResultSchema } from "../../../src/domain/dyldSharedCache.js";
+} from "../../../src/application/apple/DyldSharedCacheService.js";
+import { dyldSharedCacheResultSchema } from "../../../src/domain/apple/dyldSharedCache.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 const dylib = (installName: string, dependencies: readonly Uint8Array[] = []) =>

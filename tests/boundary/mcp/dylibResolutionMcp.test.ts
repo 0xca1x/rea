@@ -1,4 +1,4 @@
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
@@ -12,8 +12,8 @@ import {
   dylibCommand,
   machoImage,
   rpathCommand,
-} from "../../../src/artifacts/MachoImage.fixture.js";
-import { dylibResolutionResultSchema } from "../../../src/domain/dylibResolution.js";
+} from "../../../src/artifacts/apple/MachoImage.fixture.js";
+import { dylibResolutionResultSchema } from "../../../src/domain/apple/dylibResolution.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
@@ -159,3 +159,37 @@ it("traces a standalone Mach-O file whose name ends in .app", async () => {
     ]);
   });
 });
+
+it.skipIf(process.getuid?.() === 0)(
+  "keeps a permission denied while canonicalizing the opened bundle",
+  async () => {
+    const parent = await createTestTempDirectory("rea-dylib-mcp-revoked-");
+    const app = join(parent, "Revoked.app");
+    await mkdir(join(app, "Contents/MacOS"), { recursive: true });
+    await writeFile(
+      join(app, "Contents/Info.plist"),
+      "<plist><dict><key>CFBundleExecutable</key><string>App</string></dict></plist>",
+    );
+    await writeFile(join(app, "Contents/MacOS/App"), machoImage({}));
+    await withClient(async (client) => {
+      const opened = await client.callTool({
+        name: "open_binary",
+        arguments: { path: app },
+      });
+      expect(opened.isError, JSON.stringify(opened)).not.toBe(true);
+      await chmod(parent, 0o000);
+      try {
+        const called = await client.callTool({
+          name: "trace_dylib_resolution",
+          arguments: {},
+        });
+        expect(called.isError).toBe(true);
+        expect(JSON.stringify(called.structuredContent)).toMatch(
+          /Permission denied \(EACCES\)/u,
+        );
+      } finally {
+        await chmod(parent, 0o755);
+      }
+    });
+  },
+);

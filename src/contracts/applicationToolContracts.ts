@@ -2,7 +2,7 @@ import { applicationVersionComparisonResultSchema } from "../domain/javascript/j
 import {
   dyldSharedCacheResultSchema,
   inspectDyldSharedCacheInputSchema,
-} from "../domain/dyldSharedCache.js";
+} from "../domain/apple/dyldSharedCache.js";
 import { applicationFeatureTraceResultSchema } from "../domain/javascript/javascriptFeatureTraceSchemas.js";
 import { javaScriptSemanticTraceResultSchema } from "../domain/javascript/javascriptSemanticTraceSchemas.js";
 import { javaScriptExportShapeComparisonResultSchema } from "../domain/javascript/javascriptExportShapeComparisonSchemas.js";
@@ -27,7 +27,7 @@ import {
 import {
   appleApplicationProjectionInputSchema,
   appleApplicationProjectionResultSchema,
-} from "../domain/appleApplication.js";
+} from "../domain/apple/appleApplication.js";
 import type { ToolContract } from "./toolContracts.js";
 import { toolContractMetadata } from "./toolEffects.js";
 import { evidenceResultOf } from "./toolOutputSchemas.js";

@@ -5,14 +5,14 @@ import { Client, InMemoryTransport } from "@modelcontextprotocol/client";
 import { afterEach, expect, it } from "vitest";
 import { z } from "zod";
 
-import { dyldCacheFixture } from "../../../src/artifacts/DyldSharedCache.fixture.js";
+import { dyldCacheFixture } from "../../../src/artifacts/apple/DyldSharedCache.fixture.js";
 import {
   FILE_TYPE,
   LC,
   dylibCommand,
   machoImage,
-} from "../../../src/artifacts/MachoImage.fixture.js";
-import { dyldSharedCacheResultSchema } from "../../../src/domain/dyldSharedCache.js";
+} from "../../../src/artifacts/apple/MachoImage.fixture.js";
+import { dyldSharedCacheResultSchema } from "../../../src/domain/apple/dyldSharedCache.js";
 import { createServer } from "../../../src/server/createServer.js";
 import { createTestBinarySession } from "../../fixtures/binarySession.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";

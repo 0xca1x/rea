@@ -10,9 +10,9 @@ import {
   dylibCommand,
   machoImage,
   rpathCommand,
-} from "../../../src/artifacts/MachoImage.fixture.js";
-import { dyldCacheFixture } from "../../../src/artifacts/DyldSharedCache.fixture.js";
-import { dylibResolutionResultSchema } from "../../../src/domain/dylibResolution.js";
+} from "../../../src/artifacts/apple/MachoImage.fixture.js";
+import { dyldCacheFixture } from "../../../src/artifacts/apple/DyldSharedCache.fixture.js";
+import { dylibResolutionResultSchema } from "../../../src/domain/apple/dylibResolution.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
 

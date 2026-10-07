@@ -2,8 +2,8 @@ import { reconstructionCoverageEvaluationInputSchema } from "../domain/reconstru
 import { Cli, z } from "incur";
 
 import { projectAndroidApplicationEvidence } from "../application/android/AndroidApplicationService.js";
-import { projectAppleApplicationEvidence } from "../application/AppleApplicationService.js";
-import { inspectDyldSharedCacheEvidence } from "../application/DyldSharedCacheService.js";
+import { projectAppleApplicationEvidence } from "../application/apple/AppleApplicationService.js";
+import { inspectDyldSharedCacheEvidence } from "../application/apple/DyldSharedCacheService.js";
 import {
   compareApplicationVersionsEvidenceValidated,
   compareJavaScriptExportShapesEvidenceValidated,
@@ -20,7 +20,7 @@ import { AnalysisInputError } from "../domain/analysisErrorCore.js";
 import { projectAnalysisError } from "../domain/analysisErrorProjection.js";
 import { type AnalysisError } from "../domain/analysisErrorBase.js";
 import { androidApplicationProjectionInputSchema } from "../domain/android/androidApplication.js";
-import { appleApplicationProjectionInputSchema } from "../domain/appleApplication.js";
+import { appleApplicationProjectionInputSchema } from "../domain/apple/appleApplication.js";
 import { jsonValueSchema, type JsonValue } from "../domain/jsonValue.js";
 import type { Logger } from "../logger.js";
 import { traceApplicationFeatureInputSchema } from "../domain/javascript/javascriptFeatureTraceSchemas.js";

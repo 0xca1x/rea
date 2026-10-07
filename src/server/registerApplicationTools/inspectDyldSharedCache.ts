@@ -1,6 +1,6 @@
 import type { McpServer } from "@modelcontextprotocol/server";
 
-import { inspectDyldSharedCacheEvidence } from "../../application/DyldSharedCacheService.js";
+import { inspectDyldSharedCacheEvidence } from "../../application/apple/DyldSharedCacheService.js";
 import { applicationToolContract } from "../../contracts/applicationToolContracts.js";
 import { logToolExecution } from "../toolLogging.js";
 import { toolRegistrationOptions } from "../toolRegistrationOptions.js";
