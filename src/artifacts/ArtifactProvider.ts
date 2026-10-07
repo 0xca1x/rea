@@ -160,6 +160,9 @@ class ArtifactClient implements AnalysisClient {
             inputPath: this.target.sourcePath ?? this.target.path,
             inputFormat: this.target.format,
             outputRoot: parsed.output_root,
+            integrity: resolveArtifactIntegrityPolicy({
+              mode: parsed.integrity_policy,
+            }),
           },
           options?.signal,
         );

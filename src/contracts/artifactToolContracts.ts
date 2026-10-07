@@ -7,17 +7,21 @@ import { toolContractMetadata } from "./toolEffects.js";
 import { requireOutputSchema } from "./toolOutputSchemaPrimitives.js";
 import { appleAssetCatalogInputSchema } from "../domain/appleAssetCatalog.js";
 import { keyedArchiveInputSchema } from "../domain/keyedArchive.js";
+import { artifactIntegrityPolicySchema } from "../domain/artifactGraph.js";
 /** Exact caller boundary for deterministic artifact inventory. */
 export const artifactInventoryInputSchema = z.strictObject({
-  integrity_policy: z.enum(["fail", "record-and-continue"]).default("fail"),
+  integrity_policy: artifactIntegrityPolicySchema,
 });
 
 /** Extraction needs no selector: it materializes every regular child file. */
-export const artifactExtractionInputSchema = z.strictObject({});
+export const artifactExtractionInputSchema = z.strictObject({
+  integrity_policy: artifactIntegrityPolicySchema,
+});
 
 /** Provider input containing the destination chosen by the local adapter. */
 export const artifactExtractionExecutionSchema = z.strictObject({
   output_root: z.string().min(1),
+  integrity_policy: artifactIntegrityPolicySchema,
 });
 
 const exampleInputSchema = z.record(z.string(), jsonValueSchema);
@@ -63,7 +67,7 @@ export const ARTIFACT_TOOL_CONTRACTS = [
   ),
   artifact(
     "extract_artifact",
-    "Extract all regular files from the active archive or application package into a fresh temporary directory chosen by REA. The result includes its location. Rejects traversal and symlink escapes, never overwrites, enforces archive integrity checks, and verifies cleanup.",
+    "Extract all regular files from the active archive or application package into a fresh temporary directory chosen by REA. The result includes its location. Rejects traversal and symlink escapes, never overwrites, enforces archive integrity checks, and verifies cleanup. Integrity mismatches fail by default; record-and-continue extracts the observed bytes and reports each mismatch as an untrusted integrity contradiction.",
     artifactExtractionInputSchema,
   ),
   artifact(

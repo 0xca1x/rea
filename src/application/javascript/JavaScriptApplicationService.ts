@@ -55,14 +55,23 @@ export const analyzeJavaScriptApplicationValidated = async (
       {
         input_path: input.input_path,
         format: input.format,
+        integrity_policy: input.integrity_policy,
       },
       options.signal,
     );
     const { electron_summary: summary, ...application } = reconstructed;
+    const contradictions = reconstructed.integrity_contradictions.length;
     const result = javascriptApplicationAnalysisResultSchema.parse({
       ...application,
       summary,
-      limitations: reconstructed.graph.limitations,
+      limitations: [
+        ...reconstructed.graph.limitations,
+        ...(contradictions === 0
+          ? []
+          : [
+              `${String(contradictions)} artifact file(s) contradict declared integrity; their observed bytes are untrusted, and contradicted nested archives were not expanded.`,
+            ]),
+      ],
     });
     await options.progress?.report({
       phase: "analyze_javascript_application",

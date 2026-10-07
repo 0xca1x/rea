@@ -127,7 +127,11 @@ export const analysisErrorUserMessage = (error: AnalysisError): string => {
   const standardMessage = standardErrorMessage(error._tag);
   if (standardMessage !== undefined) return standardMessage;
   if (error instanceof ArtifactOperationError)
-    return artifactMessage(error.reason);
+    return error.reason === "integrity" &&
+      error.artifactDetails !== undefined &&
+      INTEGRITY_POLICY_OPERATIONS.has(error.operation)
+      ? "Artifact bytes contradict their declared integrity. If that is expected, such as an unpacked native module signed after packaging, rerun with integrity_policy record-and-continue to keep the mismatch as an untrusted contradiction; otherwise get a fresh copy."
+      : artifactMessage(error.reason);
   if (error instanceof EvidenceReferenceError)
     return error.reason === "missing"
       ? `Evidence ${error.evidenceId} is not retained in this session. Supply complete inline Evidence, re-run its producer, or import its bundle before using this reference.`
@@ -214,6 +218,15 @@ const ADAPTER_FAILURE_TAGS: ReadonlySet<AnalysisErrorTag> = new Set([
 const START_FAILURE_TAGS: ReadonlySet<AnalysisErrorTag> = new Set([
   "HopperProcessError",
   "HopperStartError",
+]);
+
+/** Operations whose callers can record integrity mismatches and continue. */
+const INTEGRITY_POLICY_OPERATIONS: ReadonlySet<
+  ArtifactOperationError["operation"]
+> = new Set([
+  "inspect_artifact",
+  "extract_artifact",
+  "analyze_javascript_application",
 ]);
 
 const artifactMessage = (reason: ArtifactOperationError["reason"]): string => {

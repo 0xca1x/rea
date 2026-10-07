@@ -122,8 +122,13 @@ const artifactOccurrenceSchema = z.object({
   limitations: z.array(z.string()),
 });
 
+/** Behavior when observed bytes contradict declared artifact integrity. */
+export const artifactIntegrityPolicySchema = z
+  .enum(["fail", "record-and-continue"])
+  .default("fail");
+
 /** Observed bytes that contradict a container's declared integrity identity. */
-const integrityContradictionSchema = z.object({
+export const integrityContradictionSchema = z.object({
   contradiction_id: contradictionIdSchema,
   occurrence_id: occurrenceIdSchema,
   parent_artifact_id: artifactIdSchema,
@@ -211,6 +216,7 @@ export const artifactExtractionResultSchema = z.object({
     residual_paths: z.array(boundedRelativePathSchema),
   }),
   provenance: z.array(artifactCommandSchema),
+  integrity_contradictions: z.array(integrityContradictionSchema).default([]),
   limitations: z.array(z.string()),
 });
 

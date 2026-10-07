@@ -66,8 +66,7 @@ it.each([
         error: {
           code: "artifact_integrity_mismatch",
           category: "integrity_mismatch",
-          message:
-            "Artifact is invalid or has changed. Get a fresh copy and try again.",
+          message: INTEGRITY_REMEDIATION,
           details: {
             logical_path: "main.js",
             declared_sha256: expect.stringMatching(/^[a-f0-9]{64}$/u),
@@ -76,8 +75,7 @@ it.each([
           },
           retryable: false,
           remediation: {
-            action:
-              "Artifact is invalid or has changed. Get a fresh copy and try again.",
+            action: INTEGRITY_REMEDIATION,
           },
         },
       });
@@ -91,6 +89,9 @@ it.each([
   },
   20_000,
 );
+
+const INTEGRITY_REMEDIATION =
+  "Artifact bytes contradict their declared integrity. If that is expected, such as an unpacked native module signed after packaging, rerun with integrity_policy record-and-continue to keep the mismatch as an untrusted contradiction; otherwise get a fresh copy.";
 
 const artifactInventoryResultSchema = z.object({
   occurrences: z.array(
@@ -141,6 +142,81 @@ it("extracts an active archive through MCP when requested", async () => {
       "console.log('extract');\n",
     );
     expect(normalized.artifacts).toHaveLength(1);
+  } finally {
+    await Promise.allSettled([client.close(), server.close(), session.close()]);
+    if (outputRoot !== undefined)
+      await rm(outputRoot, { recursive: true, force: true });
+  }
+});
+
+it("extracts an unpacked integrity mismatch only when the caller records it", async () => {
+  const root = await createTestTempDirectory("rea-asar-extract-continue-mcp-");
+  const source = join(root, "source");
+  await mkdir(source);
+  await writeFile(join(source, "main.js"), "console.log('ok');\n");
+  await writeFile(join(source, "kept.txt"), "kept\n");
+  const archive = join(root, "fixture.asar");
+  await createPackageWithOptions(source, archive, { unpack: "*.js" });
+  // Code signing after packaging changes unpacked bytes in the same way.
+  await writeFile(
+    join(`${archive}.unpacked`, "main.js"),
+    "console.log('no');\n",
+  );
+
+  const session = createTestBinarySession(new ArtifactProvider());
+  const server = createServer(session, session);
+  const client = new Client({ name: "asar-extract-continue", version: "1" });
+  const [clientTransport, serverTransport] =
+    InMemoryTransport.createLinkedPair();
+  let outputRoot: string | undefined;
+  try {
+    await server.connect(serverTransport);
+    await client.connect(clientTransport);
+    await client.callTool({
+      name: "open_binary",
+      arguments: { path: archive },
+    });
+    const strict = await client.callTool({
+      name: "extract_artifact",
+      arguments: {},
+    });
+    expect(strict.isError).toBe(true);
+    expect(strict.structuredContent).toMatchObject({
+      error: {
+        code: "artifact_integrity_mismatch",
+        message: INTEGRITY_REMEDIATION,
+      },
+    });
+
+    const result = await client.callTool({
+      name: "extract_artifact",
+      arguments: { integrity_policy: "record-and-continue" },
+    });
+    expect(result.isError, JSON.stringify(result.structuredContent)).not.toBe(
+      true,
+    );
+    const extraction = z
+      .object({
+        output_root: z.string(),
+        integrity_contradictions:
+          artifactInventoryResultSchema.shape.integrity_contradictions,
+        limitations: z.array(z.string()),
+      })
+      .parse(compactResult(result.structuredContent).result);
+    outputRoot = extraction.output_root;
+    expect(await readFile(join(outputRoot, "main.js"), "utf8")).toBe(
+      "console.log('no');\n",
+    );
+    expect(await readFile(join(outputRoot, "kept.txt"), "utf8")).toBe("kept\n");
+    expect(extraction.integrity_contradictions).toEqual([
+      expect.objectContaining({
+        logical_path: "main.js",
+        trust: "observed-untrusted",
+      }),
+    ]);
+    expect(extraction.limitations).toContain(
+      "1 extracted file(s) contradict declared integrity; their observed bytes were written and are untrusted.",
+    );
   } finally {
     await Promise.allSettled([client.close(), server.close(), session.close()]);
     if (outputRoot !== undefined)

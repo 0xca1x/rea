@@ -9,6 +9,7 @@ import { DirectoryArtifactReader } from "../../artifacts/DirectoryArtifactReader
 import type { JavaScriptApplicationGraph } from "../../domain/javascriptApplicationGraph.js";
 import type { JavaScriptSemanticGraph } from "../../domain/javascriptSemanticGraph.js";
 import type { ElectronBoundarySummary } from "../../domain/javascriptApplicationAnalysis.js";
+import type { IntegrityContradiction } from "../../domain/artifactGraph.js";
 import { analyzeJavaScriptArtifactFiles } from "./JavaScriptArtifactAnalysis.js";
 import { readJavaScriptArtifactFiles } from "./JavaScriptArtifactFiles.js";
 import { buildJavaScriptArtifactGraph } from "./JavaScriptArtifactGraphBuilder.js";
@@ -30,6 +31,7 @@ export interface JavaScriptArtifactReconstructionResult {
   readonly graph: JavaScriptApplicationGraph;
   readonly semantic_graph: JavaScriptSemanticGraph;
   readonly electron_summary: ElectronBoundarySummary;
+  readonly integrity_contradictions: readonly IntegrityContradiction[];
   readonly statistics: {
     readonly relevant_files: number;
     readonly nested_asar_containers: number;
@@ -54,7 +56,10 @@ export const reconstructJavaScriptArtifact = async (
   abortIfNeeded(signal);
   const path = await realpath(input.input_path);
   const format = await resolveFormat(path, input);
-  const snapshot = await scanCanonicalArtifactInventory(path, { signal });
+  const snapshot = await scanCanonicalArtifactInventory(path, {
+    signal,
+    integrity: { mode: input.integrity_policy },
+  });
   if (snapshot.manifest.root_format !== format)
     throw new ArtifactReaderFailure(
       "format",
@@ -80,6 +85,7 @@ export const reconstructJavaScriptArtifact = async (
       graph,
       semantic_graph: semanticGraph,
       electron_summary: summarizeElectronBoundaries(analysis),
+      integrity_contradictions: snapshot.integrity_contradictions,
       statistics: {
         relevant_files: files.files.length,
         nested_asar_containers: files.containers.length,

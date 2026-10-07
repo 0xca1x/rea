@@ -21,15 +21,19 @@ import {
   type ArtifactGraphManifest,
   type ArtifactNode,
   type ArtifactOccurrence,
+  type IntegrityContradiction,
 } from "../domain/artifactGraph.js";
 import type { BinaryTarget } from "../domain/binaryTarget.js";
 import { scanArtifactInventory } from "./ArtifactInventory.js";
+import type { ArtifactIntegrityPolicy } from "./ArtifactInventory/types.js";
 
 /** Local extraction input with the output root chosen by the adapter. */
 export interface ArtifactExtractionInput {
   readonly inputPath: string;
   readonly inputFormat: BinaryTarget["format"];
   readonly outputRoot: string;
+  /** Integrity mismatches fail unless the caller records and continues. */
+  readonly integrity?: ArtifactIntegrityPolicy;
 }
 
 /** Extract every regular inventory occurrence into an exclusively owned absent root. */
@@ -40,6 +44,7 @@ export const extractArtifact = async (
   const sourcePath = await realpath(input.inputPath);
   const snapshot = await scanArtifactInventory(sourcePath, {
     signal,
+    integrity: input.integrity,
   });
   const selectedOccurrences = snapshot.occurrences.filter(
     (occurrence) =>
@@ -63,6 +68,7 @@ export const extractArtifact = async (
     manifest: snapshot.manifest,
     occurrences,
     nodes,
+    integrityContradictions: snapshot.integrity_contradictions,
   };
   const selected = selectedOccurrences.map((occurrence) => {
     if (
@@ -206,8 +212,14 @@ const createExtractionResult = (
     containment_verified: true,
     cleanup: { attempted: false, verified: true, residual_paths: [] },
     provenance: [],
+    integrity_contradictions: inventory.integrityContradictions,
     limitations: [
       "All regular files in the active artifact were materialized; nested archive contents remain represented by their containing file.",
+      ...(inventory.integrityContradictions.length === 0
+        ? []
+        : [
+            `${String(inventory.integrityContradictions.length)} extracted file(s) contradict declared integrity; their observed bytes were written and are untrusted.`,
+          ]),
     ],
   });
 };
@@ -216,6 +228,7 @@ interface LoadedInventory {
   readonly manifest: ArtifactGraphManifest;
   readonly occurrences: ReadonlyMap<string, ArtifactOccurrence>;
   readonly nodes: ReadonlyMap<string, ArtifactNode>;
+  readonly integrityContradictions: readonly IntegrityContradiction[];
 }
 
 const collectOccurrences = (

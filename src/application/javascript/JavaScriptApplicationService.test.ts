@@ -1,6 +1,7 @@
-import { writeFile } from "node:fs/promises";
+import { mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
+import { createPackageWithOptions } from "@electron/asar";
 import { describe, expect, it } from "vitest";
 import { z } from "zod";
 
@@ -119,4 +120,58 @@ describe("JavaScript application failure diagnostics", () => {
       });
     },
   );
+});
+
+describe("JavaScript application artifact integrity", () => {
+  it("analyzes a signed-after-packaging native module only when the mismatch is recorded", async () => {
+    const root = await createTestTempDirectory("rea-js-integrity-");
+    const source = join(root, "source");
+    await mkdir(source);
+    await writeFile(
+      join(source, "package.json"),
+      '{"name":"signed","main":"main.js"}',
+    );
+    await writeFile(join(source, "main.js"), "require('./addon.node');\n");
+    await writeFile(join(source, "addon.node"), "packed native bytes");
+    const archive = join(root, "app.asar");
+    await createPackageWithOptions(source, archive, { unpack: "*.node" });
+    // macOS code signing rewrites unpacked binaries after the archive header
+    // has recorded their integrity.
+    await writeFile(
+      join(`${archive}.unpacked`, "addon.node"),
+      "signed native bytes",
+    );
+
+    const strict = await analyzeJavaScriptApplication({ input_path: archive });
+    expect(strict.ok).toBe(false);
+    if (strict.ok) throw new Error("Expected an integrity failure");
+    expect(projectAnalysisError(strict.error)).toMatchObject({
+      code: "artifact_integrity_mismatch",
+      details: { logical_path: "addon.node", unpacked: true },
+    });
+
+    const recorded = await analyzeJavaScriptApplication({
+      input_path: archive,
+      integrity_policy: "record-and-continue",
+    });
+    expect(recorded.ok).toBe(true);
+    if (!recorded.ok) throw new Error("Expected recorded analysis");
+    expect(recorded.value.parameters).toEqual({
+      format: "auto",
+      integrity_policy: "record-and-continue",
+    });
+    expect(recorded.value.normalized_result).toMatchObject({
+      format: "asar",
+      integrity_contradictions: [
+        {
+          logical_path: "addon.node",
+          unpacked: true,
+          trust: "observed-untrusted",
+        },
+      ],
+      limitations: expect.arrayContaining([
+        "1 artifact file(s) contradict declared integrity; their observed bytes are untrusted, and contradicted nested archives were not expanded.",
+      ]),
+    });
+  });
 });

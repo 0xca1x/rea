@@ -228,11 +228,16 @@ and returns its result and Evidence inline.
 
 ## Integrity record-and-continue
 
-Artifact integrity fails closed by default. A request can explicitly select
+Artifact integrity fails closed by default. `inspect_artifact`,
+`extract_artifact`, and `analyze_javascript_application` accept
 `integrity_policy=record-and-continue` when the investigation needs verified
-siblings to continue after a mismatch.
+siblings to continue after a mismatch. A common expected mismatch is an
+unpacked native module that macOS code signing rewrote after the ASAR header
+recorded its integrity.
 
 Contradictory bytes are quarantined from nested expansion and recorded with
 declared and observed hashes, trust, provenance, path, and unpacked state.
-Verified siblings continue. Comparisons classify the result as a contradiction
-and reconstruction cannot treat it as unchanged.
+Verified siblings continue. Extraction writes the observed bytes and returns the
+contradictions with its result; JavaScript analysis reads contradicted files as
+observed and lists them in `integrity_contradictions`. Comparisons classify the
+result as a contradiction and reconstruction cannot treat it as unchanged.

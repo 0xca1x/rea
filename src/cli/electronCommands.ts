@@ -175,6 +175,7 @@ const registerJavaScriptApplicationCommand = (
         runCliJavaScriptApplicationAnalysis({
           input_path: args.path,
           format: options.artifactFormat,
+          integrity_policy: options.integrityPolicy,
         }),
       ),
   });
