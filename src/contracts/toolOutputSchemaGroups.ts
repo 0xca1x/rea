@@ -30,18 +30,18 @@ import {
 } from "../domain/nativeInspection.js";
 import { artifactExtractionResultSchema } from "../domain/artifactGraph.js";
 import { artifactInspectionResultSchema } from "../domain/artifactInspection.js";
-import { interfaceBuilderAnalysisSchema } from "../domain/interfaceBuilderGraph.js";
-import { keyedArchiveResultSchema } from "../domain/keyedArchive.js";
-import { appleAssetCatalogResultSchema } from "../domain/appleAssetCatalog.js";
+import { interfaceBuilderAnalysisSchema } from "../domain/apple/interfaceBuilderGraph.js";
+import { keyedArchiveResultSchema } from "../domain/apple/keyedArchive.js";
+import { appleAssetCatalogResultSchema } from "../domain/apple/appleAssetCatalog.js";
 import {
   managedArtifactInspectionSchema,
   managedMemberInspectionSchema,
   managedNativeBoundaryInspectionSchema,
-} from "../domain/managedArtifact.js";
-import { managedMemberComparisonResultSchema } from "../domain/managedMemberComparison.js";
-import { managedNativeVerificationResultSchema } from "../domain/managedNativeVerification.js";
-import { managedReconstructionImportResultSchema } from "../domain/managedReconstruction.js";
-import { managedApplicationGraphResultSchema } from "../domain/managedApplicationGraph.js";
+} from "../domain/managed/managedArtifact.js";
+import { managedMemberComparisonResultSchema } from "../domain/managed/managedMemberComparison.js";
+import { managedNativeVerificationResultSchema } from "../domain/managed/managedNativeVerification.js";
+import { managedReconstructionImportResultSchema } from "../domain/managed/managedReconstruction.js";
+import { managedApplicationGraphResultSchema } from "../domain/managed/managedApplicationGraph.js";
 import { artifactComparisonResultSchema } from "../domain/artifactComparison.js";
 import { functionComparisonResultSchema } from "../domain/functionComparison.js";
 import { bundleComparisonResultSchema } from "../domain/bundleComparison.js";
