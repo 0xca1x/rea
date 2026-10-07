@@ -108,3 +108,11 @@ export const compatibleSlice = (
   }
   return undefined;
 };
+
+/** A cache serves processes of its CPU family: arm64e also serves arm64. */
+export const cacheServes = (cache: string, process: string): boolean =>
+  cache === process ||
+  (cache.startsWith("arm64") &&
+    process.startsWith("arm64") &&
+    process !== "arm64_32") ||
+  (cache.startsWith("x86_64") && process.startsWith("x86_64"));

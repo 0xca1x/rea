@@ -1,4 +1,8 @@
 import { applicationVersionComparisonResultSchema } from "../domain/javascript/javascriptApplicationVersionComparisonSchemas.js";
+import {
+  dyldSharedCacheResultSchema,
+  inspectDyldSharedCacheInputSchema,
+} from "../domain/dyldSharedCache.js";
 import { applicationFeatureTraceResultSchema } from "../domain/javascript/javascriptFeatureTraceSchemas.js";
 import { javaScriptSemanticTraceResultSchema } from "../domain/javascript/javascriptSemanticTraceSchemas.js";
 import { javaScriptExportShapeComparisonResultSchema } from "../domain/javascript/javascriptExportShapeComparisonSchemas.js";
@@ -295,6 +299,25 @@ export const APPLICATION_TOOL_CONTRACTS = [
       },
     ],
   },
+  {
+    name: "inspect_dyld_shared_cache",
+    ...toolContractMetadata("inspect_dyld_shared_cache"),
+    description:
+      "Inspect an Apple dyld shared cache file set selected by path, such as /System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e or one extracted from an IPSW. Reports the cache UUID, architecture, platform and OS version, VM mappings, every subcache with UUID verification, and the complete image list. For each requested install path, it reads that image's load commands (install name, dependencies, rpaths) through the cache mappings. Pure file parsing: nothing is executed, slid, or extracted.",
+    kind: "application",
+    inputSchema: inspectDyldSharedCacheInputSchema,
+    outputSchema: evidenceResultOf(dyldSharedCacheResultSchema),
+    examples: [
+      {
+        title: "Inspect the host's arm64e shared cache and libSystem",
+        input: {
+          cache_path:
+            "/System/Volumes/Preboot/Cryptexes/OS/System/Library/dyld/dyld_shared_cache_arm64e",
+          images: ["/usr/lib/libSystem.B.dylib"],
+        },
+      },
+    ],
+  },
 ] as const satisfies readonly ToolContract[];
 
 /** Resolve one named application contract without relying on array position. */
@@ -325,6 +348,9 @@ export function applicationToolContract(
 export function applicationToolContract(
   name: "project_apple_application_graph",
 ): (typeof APPLICATION_TOOL_CONTRACTS)[8];
+export function applicationToolContract(
+  name: "inspect_dyld_shared_cache",
+): (typeof APPLICATION_TOOL_CONTRACTS)[9];
 export function applicationToolContract(
   name: (typeof APPLICATION_TOOL_CONTRACTS)[number]["name"],
 ): (typeof APPLICATION_TOOL_CONTRACTS)[number] {

@@ -7,6 +7,7 @@ import { registerCompareSourceToBundleTool } from "./registerApplicationTools/co
 import { registerCompareJavaScriptExportShapesTool } from "./registerApplicationTools/compareExportShapes.js";
 import { registerCoverageTools } from "./registerApplicationTools/coverage.js";
 import { registerReconstructionObligationLedgerTool } from "./registerApplicationTools/obligationLedger.js";
+import { registerInspectDyldSharedCacheTool } from "./registerApplicationTools/inspectDyldSharedCache.js";
 import { registerProjectMobileApplicationGraphTools } from "./registerApplicationTools/projectMobileApplicationGraph.js";
 import type { ApplicationToolRegistration } from "./registerApplicationTools/types.js";
 
@@ -25,4 +26,5 @@ export const registerApplicationTools = (
   registerReconstructionObligationLedgerTool(server, options);
   registerCoverageTools(server, options);
   registerProjectMobileApplicationGraphTools(server, options);
+  registerInspectDyldSharedCacheTool(server, options);
 };

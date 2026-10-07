@@ -26,6 +26,7 @@ export const CLI_COMMANDS = Object.freeze({
   decodeInterfaceBuilder: "decode-interface-builder",
   inspectKeyedArchive: "inspect-keyed-archive",
   traceDylibResolution: "trace-dylib-resolution",
+  inspectDyldSharedCache: "inspect-dyld-shared-cache",
   inspectNativeDataType: "inspect-native-data-type",
   inspectNativeLoadImage: "inspect-native-load-image",
   readBytes: "read-bytes",

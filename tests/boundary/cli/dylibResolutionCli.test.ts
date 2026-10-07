@@ -10,6 +10,7 @@ import {
   machoImage,
   rpathCommand,
 } from "../../../src/artifacts/MachoImage.fixture.js";
+import { dyldCacheFixture } from "../../../src/artifacts/DyldSharedCache.fixture.js";
 import { dylibResolutionResultSchema } from "../../../src/domain/dylibResolution.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 import { cliTest } from "../../support/cli/cliFixture.js";
@@ -137,7 +138,9 @@ describe("trace-dylib-resolution CLI", () => {
       }
     },
   );
+});
 
+describe("trace-dylib-resolution CLI inputs", () => {
   cliTest(
     "resolves a standalone Mach-O against its own directory",
     async ({ cli }) => {
@@ -189,6 +192,49 @@ describe("trace-dylib-resolution CLI", () => {
         status: "partial",
         unparsed_images: ["Contents/Helpers/broken"],
       });
+    },
+  );
+
+  cliTest(
+    "answers system install paths from a supplied shared cache",
+    async ({ cli }) => {
+      const directory = await createTestTempDirectory("rea-dylib-cache-");
+      await writeFiles(directory, {
+        tool: machoImage({
+          commands: [
+            dylibCommand(LC.LOAD_DYLIB, "/usr/lib/libSystem.B.dylib"),
+            dylibCommand(LC.LOAD_DYLIB, "/usr/lib/libnotcached.dylib"),
+          ],
+        }),
+        dyld_shared_cache_arm64e: dyldCacheFixture([
+          {
+            path: "/usr/lib/libSystem.B.dylib",
+            bytes: machoImage({ fileType: FILE_TYPE.dylib }),
+          },
+        ]).main,
+      });
+      const result = await cli.run({
+        arguments: [
+          "trace-dylib-resolution",
+          join(directory, "tool"),
+          "--shared-cache",
+          join(directory, "dyld_shared_cache_arm64e"),
+          "--json",
+        ],
+        environment: ENVIRONMENT,
+      });
+      expect(result.exitCode, JSON.stringify(result.json)).toBe(0);
+      const trace = dylibResolutionResultSchema.parse(
+        (result.json as { normalized_result: unknown }).normalized_result,
+      );
+      expect(trace.shared_cache).toMatchObject({
+        architecture: "arm64e",
+        os_version: "26.6.0",
+      });
+      expect(trace.edges.map(({ resolution }) => resolution.status)).toEqual([
+        "shared-cache",
+        "undetermined",
+      ]);
     },
   );
 });

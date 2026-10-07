@@ -81,8 +81,10 @@ After `open_binary` on a `.app` or Mach-O, use `trace_dylib_resolution` to see
 which file each `@rpath`, `@loader_path` and `@executable_path` load reaches for
 every executable in the bundle. It also lists missing or weak loads and earlier
 `@rpath` candidates that are absent. Narrow large bundles with `roots` or
-`architecture`. System paths stay undetermined because the dyld shared cache
-provides them.
+`architecture`. Pass `shared_cache` (the host cache or one from an IPSW) to
+resolve system paths to `shared-cache`; without it they stay undetermined.
+Use `inspect_dyld_shared_cache` with that cache path to list its images and read
+a cached library's dependencies without an open target.
 
 Use `extract_artifact` when materialized files are needed. It takes no arguments
 and materializes all regular files into a fresh temporary directory chosen by

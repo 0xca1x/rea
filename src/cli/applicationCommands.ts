@@ -3,6 +3,7 @@ import { Cli, z } from "incur";
 
 import { projectAndroidApplicationEvidence } from "../application/android/AndroidApplicationService.js";
 import { projectAppleApplicationEvidence } from "../application/AppleApplicationService.js";
+import { inspectDyldSharedCacheEvidence } from "../application/DyldSharedCacheService.js";
 import {
   compareApplicationVersionsEvidenceValidated,
   compareJavaScriptExportShapesEvidenceValidated,
@@ -83,6 +84,7 @@ export const registerApplicationCommands = (
     workflow: compareJavaScriptExportShapesEvidenceValidated,
   });
   registerObligationLedgerCommand(cli, logger);
+  registerDyldSharedCacheCommand(cli, logger);
   registerCoverageCommand(cli, logger);
   registerJsonCommand({
     cli,
@@ -111,6 +113,39 @@ export const registerApplicationCommands = (
         ? { ok: true, value: jsonValueSchema.parse(result.value) }
         : result;
     },
+  });
+};
+
+/** `inspect-dyld-shared-cache <cache> [--image <install path>]...` */
+const registerDyldSharedCacheCommand = (
+  cli: CliInstance,
+  logger: Logger,
+): void => {
+  cli.command(CLI_COMMANDS.inspectDyldSharedCache, {
+    description:
+      "Inspect a dyld shared cache file set and, optionally, cached images",
+    args: z.object({
+      cachePath: z.string().describe("Main dyld shared cache file"),
+    }),
+    options: z.object({
+      image: z
+        .array(z.string())
+        .optional()
+        .describe("Install path of a cached image to inspect (repeatable)"),
+    }),
+    run: ({ args, options }) =>
+      logCliCommand(logger, CLI_COMMANDS.inspectDyldSharedCache, async () => {
+        const result = await inspectDyldSharedCacheEvidence({
+          cache_path: args.cachePath,
+          ...(options.image === undefined ? {} : { images: options.image }),
+        });
+        return result.ok
+          ? jsonValueSchema.parse(result.value)
+          : {
+              error: "Application workflow failed",
+              ...projectAnalysisError(result.error),
+            };
+      }),
   });
 };
 

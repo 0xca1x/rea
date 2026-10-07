@@ -71,6 +71,12 @@ an XML graph golden. `verify:asset-catalog` compiles source-owned colors with
 `actool`, invokes real `assetutil`, then checks CLI/MCP results, exact catalog
 digest, every raw metadata field, pagination and malformed input rejection.
 Neither artifact workflow requires Hopper or launches it. Both run in macOS CI.
+`verify:dyld-shared-cache` reads the host's dyld shared cache. It checks that
+the image list, and every image's dependencies with their attributes, equal
+`dyld_info -all_dyld_cache -linked_dylibs`, and that `inspect-dyld-shared-cache`
+agrees between CLI and stdio MCP. It then traces the clang-built fixture app
+with `--shared-cache` and checks that every `shared-cache` edge names a library
+dyld actually loads under `DYLD_PRINT_LIBRARIES`.
 `verify:macos-bundle` needs only macOS with Command Line Tools. It compiles a
 source-owned app with `clang`: a versioned framework, XPC services, an app
 extension, a login item, a privileged helper, launchd plists, and a helper tool,

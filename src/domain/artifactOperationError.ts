@@ -13,6 +13,7 @@ export class ArtifactOperationError extends AnalysisError {
       | "inspect_asset_catalog"
       | "inspect_keyed_archive"
       | "trace_dylib_resolution"
+      | "inspect_dyld_shared_cache"
       | "export_web_scripts"
       | "trace_web_module_imports"
       | "trace_web_source_location"

@@ -518,3 +518,74 @@ describe("dyld slice compatibility and coverage", () => {
     );
   });
 });
+
+describe("shared cache resolution", () => {
+  const cache = {
+    architecture: "arm64e",
+    has: (path: string) =>
+      [
+        "/usr/lib/libSystem.B.dylib",
+        "/usr/lib/swift/libswiftCore.dylib",
+      ].includes(path),
+  };
+
+  it("resolves cached system paths before bundled fallbacks", async () => {
+    const trace = await traceDylibLoading(
+      memoryView({
+        [MAIN]: executable({
+          rpaths: ["/usr/lib/swift", "@executable_path/../Frameworks"],
+          dependencies: [
+            dependency("/usr/lib/libSystem.B.dylib"),
+            dependency("@rpath/libswiftCore.dylib"),
+            dependency("/usr/lib/libgone.dylib"),
+          ],
+        }),
+        "Contents/Frameworks/libswiftCore.dylib": parsed(slice()),
+      }),
+      { roots: [MAIN], sharedCache: cache },
+    );
+    expect(
+      trace.edges.map(({ install_name: name, resolution, candidates }) => [
+        name,
+        resolution,
+        candidates.map(({ outcome }) => outcome),
+      ]),
+    ).toEqual([
+      [
+        "/usr/lib/libSystem.B.dylib",
+        { status: "shared-cache", image: "/usr/lib/libSystem.B.dylib" },
+        ["shared-cache"],
+      ],
+      [
+        "@rpath/libswiftCore.dylib",
+        { status: "shared-cache", image: "/usr/lib/swift/libswiftCore.dylib" },
+        ["shared-cache"],
+      ],
+      [
+        "/usr/lib/libgone.dylib",
+        { status: "undetermined", image: null },
+        ["outside-target"],
+      ],
+    ]);
+    expect(trace.images.map(({ path }) => path)).toEqual([MAIN]);
+    expect(trace.limitations).toContainEqual(
+      expect.stringContaining("looked up in the supplied dyld shared cache"),
+    );
+  });
+
+  it("does not consult a cache for processes it cannot serve", async () => {
+    const trace = await traceDylibLoading(
+      memoryView({
+        [MAIN]: executable({
+          architecture: "x86_64",
+          dependencies: [dependency("/usr/lib/libSystem.B.dylib")],
+        }),
+      }),
+      { roots: [MAIN], sharedCache: cache },
+    );
+    expect(trace.edges[0]?.candidates[0]?.outcome).toBe("outside-target");
+    expect(trace.limitations).toContain(
+      "The arm64e shared cache does not serve x86_64 processes; their system paths stay undetermined.",
+    );
+  });
+});

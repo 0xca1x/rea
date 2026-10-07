@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { lstat, open, readlink, realpath } from "node:fs/promises";
-import { join, relative, sep } from "node:path";
+import { join, relative, resolve, sep } from "node:path";
 
 import {
   dylibResolutionInputSchema,
@@ -14,6 +14,7 @@ import {
 } from "../domain/dylibResolution.js";
 import { ArtifactReaderFailure } from "./ArtifactReader.js";
 import { DirectoryArtifactReader } from "./DirectoryArtifactReader.js";
+import { DyldSharedCache } from "./DyldSharedCacheReader.js";
 import { hasMachoMagic, readMachoImage } from "./MachoLoadCommandReader.js";
 
 const HASH_CHUNK_BYTES = 1024 * 1024;
@@ -80,7 +81,9 @@ export const traceDylibResolution = async (options: {
     .split(sep)
     .join("/");
   const view = new FilesystemTreeView(root, options.signal);
+  let cache: DyldSharedCache | undefined;
   try {
+    cache = await openSharedCache(parsed.data.shared_cache, options.signal);
     const { roots, unclassified } =
       parsed.data.roots !== undefined
         ? { roots: parsed.data.roots, unclassified: [] }
@@ -94,6 +97,7 @@ export const traceDylibResolution = async (options: {
       ...(parsed.data.architecture === undefined
         ? {}
         : { architecture: parsed.data.architecture }),
+      ...(cache === undefined ? {} : { sharedCache: sharedCacheView(cache) }),
       ...(options.signal === undefined ? {} : { signal: options.signal }),
     });
     const digests = new Map<string, string>();
@@ -111,6 +115,15 @@ export const traceDylibResolution = async (options: {
       ...trace,
       root_path: options.rootPath,
       target_sha256: options.targetSha256,
+      shared_cache:
+        cache === undefined || parsed.data.shared_cache === undefined
+          ? null
+          : {
+              path: resolve(parsed.data.shared_cache),
+              uuid: cache.header.uuid,
+              architecture: cache.header.architecture,
+              os_version: cache.header.os_version,
+            },
       images: trace.images.map((image) => ({
         ...image,
         sha256: digests.get(image.path),
@@ -124,8 +137,33 @@ export const traceDylibResolution = async (options: {
         { cause },
       );
     throw cause;
+  } finally {
+    await cache?.close();
   }
 };
+
+const openSharedCache = async (
+  path: string | undefined,
+  signal?: AbortSignal,
+): Promise<DyldSharedCache | undefined> => {
+  if (path === undefined) return undefined;
+  try {
+    return await DyldSharedCache.open(resolve(path), signal);
+  } catch (cause: unknown) {
+    if (missing(cause))
+      throw new ArtifactReaderFailure(
+        "path",
+        "shared_cache does not name an existing dyld shared cache file",
+        { cause },
+      );
+    throw cause;
+  }
+};
+
+const sharedCacheView = (cache: DyldSharedCache) => ({
+  architecture: cache.header.architecture,
+  has: (path: string): boolean => cache.find(path) !== undefined,
+});
 
 /**
  * Every Mach-O in the bundle with an executable slice is its own process root.

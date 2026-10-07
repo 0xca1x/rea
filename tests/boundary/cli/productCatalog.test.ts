@@ -175,7 +175,7 @@ describe("canonical product catalog", () => {
     expect(
       catalog.providers.find(({ id }) => id === APPLE_APPLICATION_PROVIDER.id)
         ?.capabilities,
-    ).toEqual(["project_apple_application_graph"]);
+    ).toEqual(["inspect_dyld_shared_cache", "project_apple_application_graph"]);
     expect(
       catalog.providers.find(({ id }) => id === MANAGED_WORKFLOW_PROVIDER.id)
         ?.capabilities,

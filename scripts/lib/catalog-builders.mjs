@@ -211,7 +211,8 @@ export const providerCatalog = (sources) => {
       contracts: sources.applicationContracts.APPLICATION_TOOL_CONTRACTS.filter(
         ({ name }) =>
           name !== "project_android_application_graph" &&
-          name !== "project_apple_application_graph",
+          name !== "project_apple_application_graph" &&
+          name !== "inspect_dyld_shared_cache",
       ),
     },
     {
@@ -223,7 +224,9 @@ export const providerCatalog = (sources) => {
     {
       identity: sources.artifactProviders.APPLE_APPLICATION_PROVIDER,
       contracts: sources.applicationContracts.APPLICATION_TOOL_CONTRACTS.filter(
-        ({ name }) => name === "project_apple_application_graph",
+        ({ name }) =>
+          name === "project_apple_application_graph" ||
+          name === "inspect_dyld_shared_cache",
       ),
     },
     {
