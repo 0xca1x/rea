@@ -71,6 +71,14 @@ an XML graph golden. `verify:asset-catalog` compiles source-owned colors with
 `actool`, invokes real `assetutil`, then checks CLI/MCP results, exact catalog
 digest, every raw metadata field, pagination and malformed input rejection.
 Neither artifact workflow requires Hopper or launches it. Both run in macOS CI.
+`verify:installer-package` needs only macOS's `pkgbuild`, `productbuild` and
+`pkgutil`. It builds a component package with install scripts, a product package
+around it, and a pbzx (`--compression latest`) package. It checks that
+`inspect-artifact` expands Scripts and Payload with exact content digests, and
+that the expanded Payload members equal Apple's `pkgutil --payload-files`
+listing. It also checks that the product package nests its component, that the
+pbzx payload is recorded with a limitation instead of being expanded, and that
+CLI and stdio MCP results agree.
 `verify:macos-bundle` needs only macOS with Command Line Tools. It compiles a
 source-owned app with `clang`: a versioned framework, XPC services, an app
 extension, a login item, a privileged helper, launchd plists, and a helper tool,

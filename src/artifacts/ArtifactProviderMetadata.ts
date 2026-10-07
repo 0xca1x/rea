@@ -35,7 +35,7 @@ export const artifactCapabilities = (
           requiresRoot: false,
         }),
         limitations: Object.freeze([
-          "DMG child inventory automatically uses a read-only native macOS mount; PKG remains root-hash-only.",
+          "DMG child inventory automatically uses a read-only native macOS mount. PKG (xar) inventory expands gzip-cpio Scripts and Payload members; pbzx payloads are recorded without expansion.",
           "ASAR files discovered in filesystem-backed inventories are expanded without bulk extraction; other nested containers remain recorded only.",
         ]),
       };

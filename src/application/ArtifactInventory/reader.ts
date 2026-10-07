@@ -3,6 +3,7 @@ import type { ArtifactReader } from "../../artifacts/ArtifactReader.js";
 import { DirectoryArtifactReader } from "../../artifacts/DirectoryArtifactReader.js";
 import { MachOSliceArtifactReader } from "../../artifacts/MachOSliceArtifactReader.js";
 import { NativeDmgArtifactReader } from "../../artifacts/NativeDmgArtifactReader.js";
+import { XarArtifactReader } from "../../artifacts/XarArtifactReader.js";
 import { ZipArtifactReader } from "../../artifacts/ZipArtifactReader.js";
 import type { ArtifactNode } from "../../domain/artifactGraph.js";
 
@@ -22,6 +23,8 @@ export const createReader = async (
       return new ZipArtifactReader(path, format);
     case "asar":
       return new AsarArtifactReader(path);
+    case "pkg":
+      return new XarArtifactReader(path);
     case "mach-o-universal":
       return process.platform === "darwin"
         ? new MachOSliceArtifactReader(path)
@@ -39,9 +42,9 @@ export const inventoryLimitations = (
   reader: ArtifactReader | undefined,
 ): string[] => {
   if (reader !== undefined) return [];
-  if (format === "dmg" || format === "pkg")
+  if (format === "dmg")
     return [
-      `${format.toUpperCase()} root hash is observed; child inventory requires a native macOS adapter.`,
+      "DMG root hash is observed; child inventory requires a native macOS adapter.",
     ];
   if (format === "mach-o-universal" && process.platform !== "darwin")
     return ["Universal Mach-O slices require the native macOS lipo adapter."];

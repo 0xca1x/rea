@@ -10,6 +10,7 @@ import {
   type ArtifactReader,
 } from "../../artifacts/ArtifactReader.js";
 import { AsarArtifactReader } from "../../artifacts/AsarArtifactReader.js";
+import { CpioArtifactReader } from "../../artifacts/CpioArtifactReader.js";
 import type { ArtifactNode } from "../../domain/artifactGraph.js";
 import {
   classifyArtifactContent,
@@ -123,11 +124,10 @@ const visitArtifactEntries = async (
           ? entry.path
           : `${frame.prefix}/${entry.path}`,
       );
-      const expandableAsar = isExpandableAsar(entry, logicalPath);
-      context.registry.add(
-        logicalPath,
-        expandableAsar ? "directory" : entry.kind,
-      );
+      const expandable =
+        isExpandableAsar(entry, logicalPath) ||
+        entry.nestedArchive === "gzip-cpio";
+      context.registry.add(logicalPath, expandable ? "directory" : entry.kind);
       const occurrence = createOccurrence(entry, logicalPath, null);
       let digested:
         | { readonly node: ArtifactNode; readonly mismatched: boolean }
@@ -157,9 +157,13 @@ const visitArtifactEntries = async (
       }
       context.occurrences.push(occurrence);
       context.occurrenceByPath.set(logicalPath, occurrence);
-      if (expandableAsar && digested?.mismatched !== true) {
-        const nested = new AsarArtifactReader(entry.adapterKey);
-        // Only traversed containers can own members, not opaque ASAR-named files.
+      if (expandable && digested?.mismatched !== true) {
+        const parent = frame.reader;
+        const nested: ArtifactReader =
+          entry.nestedArchive === "gzip-cpio"
+            ? new CpioArtifactReader((signal) => parent.open(entry, signal))
+            : new AsarArtifactReader(entry.adapterKey);
+        // Only traversed containers can own members, not opaque archive-named files.
         context.expandedContainerIds.add(occurrence.occurrence_id);
         stack.push({
           reader: nested,
