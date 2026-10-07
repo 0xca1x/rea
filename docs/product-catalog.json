@@ -10,7 +10,7 @@
     "skill_version": "28"
   },
   "tools": {
-    "total": 131,
+    "total": 133,
     "families": [
       {
         "id": "direct",
@@ -142,7 +142,7 @@
       {
         "id": "browser",
         "surface": "browser-provider",
-        "count": 9,
+        "count": 11,
         "tools": [
           "analyze_web_bundle",
           "capture_browser_scenario",
@@ -150,8 +150,10 @@
           "compare_web_captures",
           "compare_web_screenshots",
           "discover_webmcp_tools",
+          "inspect_web_event_listeners",
           "inspect_web_page",
           "list_browser_targets",
+          "observe_web_execution",
           "observe_web_session"
         ]
       },
@@ -389,8 +391,10 @@
         "compare_web_captures",
         "compare_web_screenshots",
         "discover_webmcp_tools",
+        "inspect_web_event_listeners",
         "inspect_web_page",
         "list_browser_targets",
+        "observe_web_execution",
         "observe_web_session"
       ]
     },
@@ -566,7 +570,7 @@
     }
   ],
   "cli": {
-    "primary_count": 86,
+    "primary_count": 88,
     "commands": [
       "address-to-file-offset",
       "analyze",
@@ -622,6 +626,7 @@
       "inspect-native-load-image",
       "inspect-plist",
       "inspect-signature",
+      "inspect-web-event-listeners",
       "inspect-web-page",
       "instructions",
       "list-architectures",
@@ -630,6 +635,7 @@
       "list-javascript-runtime-targets",
       "observe-javascript-runtime",
       "observe-native-ui",
+      "observe-web-execution",
       "observe-web-session",
       "project-android-application-graph",
       "project-apple-application-graph",
@@ -664,15 +670,15 @@
   },
   "runtime_catalog": {
     "counts": {
-      "cli_commands": 86,
-      "mcp_tools": 131,
+      "cli_commands": 88,
+      "mcp_tools": 133,
       "mcp_prompts": 6
     },
     "digests": {
-      "tools_sha256": "3381610341f922f75fdc2e2201fe54e66e7f431fee3b4316c95d85e2534749b8",
+      "tools_sha256": "57f5c4fd14a1d5c4c96675bab5132255e59fde47a84a38914de460d50b69befe",
       "prompts_sha256": "ef2de8814390b340623c32001610aa2709d90bed51537b6e562ab3abf144ab4d",
-      "combined_sha256": "ab7efdea56f2e319bafbf1e1fc7d8ff998f3da1845968acb1614fc5be4dd6250",
-      "providers_sha256": "a7d885531ee25d42c51385444faec544d34cd7eba6250a7dc75c4faedd4454a3"
+      "combined_sha256": "aeec5ac03b76d4c11b08a03e0fdeae3290ec6fc08a75f03a33f72395be6c8af1",
+      "providers_sha256": "aea15f517c822d80918ccaba57a4fa06557f484cf27b8acbaed4e1a660fac896"
     }
   }
 }

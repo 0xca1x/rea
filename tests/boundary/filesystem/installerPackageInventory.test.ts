@@ -9,7 +9,7 @@ import {
   gzipCpio,
   xarArchive,
 } from "../../../src/artifacts/InstallerPackage.fixture.js";
-import { runProviderAnalysis } from "../../../src/application/DirectAnalysis.js";
+import { runProviderAnalysis } from "../../../src/composition/directAnalysis.js";
 import { artifactInventoryResultSchema } from "../../../src/domain/artifactGraph.js";
 import { parseEvidence } from "../../../src/domain/evidence.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
