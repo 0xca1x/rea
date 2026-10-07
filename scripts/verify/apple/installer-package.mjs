@@ -10,7 +10,7 @@ import {
   artifactCli,
   artifactMcpResult,
   withArtifactMcp,
-} from "./lib/artifact-e2e.mjs";
+} from "../../lib/artifact-e2e.mjs";
 
 const exec = promisify(execFile);
 
