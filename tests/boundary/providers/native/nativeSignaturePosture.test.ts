@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { mkdir, writeFile } from "node:fs/promises";
+import { chmod, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -72,6 +72,7 @@ describe("native signature posture", () => {
       path: "Contents/CodeResources",
       sha256: createHash("sha256").update(ticket).digest("hex"),
       size: ticket.length,
+      reason: null,
     });
     expect(
       Object.fromEntries(
@@ -132,4 +133,64 @@ describe("native signature posture", () => {
       stapled_ticket: { status: "not-applicable" },
     });
   });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "keeps inspecting when the stapled ticket cannot be read",
+    async () => {
+      const { app, executable } = await fixtureApp("ticket");
+      const ticket = join(app, "Contents/CodeResources");
+      await chmod(ticket, 0o000);
+      try {
+        const signature = await new NativeMacOSProvider(
+          new FixtureRunner(),
+          "darwin",
+        )
+          .createClient(machoTarget(executable, app))
+          .execute("inspect_signature", {});
+        expect(signature.ok && signature.value.result).toMatchObject({
+          stapled_ticket: {
+            status: "unreadable",
+            path: "Contents/CodeResources",
+            sha256: null,
+            reason: "EACCES",
+          },
+          verification: { status: "valid" },
+        });
+      } finally {
+        await chmod(ticket, 0o644);
+      }
+    },
+  );
+
+  it("reports unsigned nested code inside a signed bundle as invalid", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new UnsignedNestedRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    expect(signature.ok && signature.value.result).toMatchObject({
+      signed: true,
+      verification: { status: "invalid", exit_code: 1 },
+    });
+  });
 });
+
+/** A signed bundle whose nested helper is unsigned. */
+class UnsignedNestedRunner extends FixtureRunner {
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || arguments_[0] !== "--verify") return result;
+    const stderr =
+      "/Applications/Fixture.app/Contents/Helpers/tool: code object is not signed at all\nIn subcomponent: /Applications/Fixture.app/Contents/Helpers/tool\n";
+    return ok({
+      ...result.value,
+      stdout: "",
+      stderr,
+      stdoutBytes: 0,
+      stderrBytes: Buffer.byteLength(stderr),
+      exitCode: 1,
+    });
+  }
+}

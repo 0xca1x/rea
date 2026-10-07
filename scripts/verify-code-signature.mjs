@@ -132,6 +132,22 @@ try {
   assert.equal(platform.verification.status, "valid");
   assert.equal(facets(platform)["library-validation"], "enforced");
 
+  // Only deep verification sees a file added inside nested code.
+  const nested = join(root, "Nested.app");
+  await exec("/usr/bin/ditto", [app, nested]);
+  await writeFile(
+    join(nested, "Contents/XPCServices/Svc.xpc/Contents/added.txt"),
+    "unsealed",
+  );
+  const nestedTamper = await artifactCli("inspect-signature", nested);
+  assert.equal(nestedTamper.verification.status, "invalid");
+  assert.ok(
+    nestedTamper.verification.diagnostics.some((line) =>
+      line.includes("Svc.xpc"),
+    ),
+    JSON.stringify(nestedTamper.verification),
+  );
+
   await mkdir(join(app, "Contents/Resources"), { recursive: true });
   await writeFile(join(app, "Contents/Resources/added.txt"), "unsealed");
   const tampered = await artifactCli("inspect-signature", app);
@@ -155,6 +171,7 @@ try {
       ],
       platform_identifier: platform.code_directory.platform_identifier,
       tampered_verification: tampered.verification.status,
+      nested_tamper_verification: nestedTamper.verification.status,
     })}\n`,
   );
 } finally {

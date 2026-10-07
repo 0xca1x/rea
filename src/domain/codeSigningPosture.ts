@@ -42,7 +42,7 @@ export const sealedResourcesSchema = z.object({
   files: z.number().int().nullable(),
 });
 
-/** Local `codesign --verify --strict` outcome for the signed code. */
+/** Local `codesign --verify --deep --strict` outcome for the signed code. */
 export const signatureVerificationSchema = z.object({
   path: z.string(),
   status: z.enum(["valid", "invalid", "unsigned"]),
@@ -53,13 +53,15 @@ export const signatureVerificationSchema = z.object({
 
 /** Presence of a notarization ticket stapled to an app bundle. */
 export const stapledTicketSchema = z.object({
-  status: z.enum(["present", "absent", "not-applicable"]),
+  status: z.enum(["present", "absent", "unreadable", "not-applicable"]),
   path: z.string().nullable(),
   sha256: z
     .string()
     .regex(/^[a-f0-9]{64}$/u)
     .nullable(),
   size: z.number().int().nonnegative().nullable(),
+  /** Why an existing ticket file could not be read, such as EACCES. */
+  reason: z.string().nullable(),
 });
 
 const facetSchema = z.discriminatedUnion("facet", [

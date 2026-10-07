@@ -346,7 +346,8 @@ class NativeMacOSClient implements AnalysisClient {
     const verify = await this.#run(
       "inspect_signature",
       "codesign",
-      ["--verify", "--strict", "--verbose=2", verifyPath],
+      // --deep verifies nested frameworks, helpers, extensions and XPC services.
+      ["--verify", "--deep", "--strict", "--verbose=2", verifyPath],
       { signal, acceptNonZero: true },
     );
     if (!verify.ok) return verify;
@@ -387,11 +388,9 @@ class NativeMacOSClient implements AnalysisClient {
       ...parsed,
       designated_requirement: requirementText,
       entitlements: entitlementValue.value,
-      verification: signatureVerification(
-        verify.value,
-        verifyPath,
-        isNonzeroUnsignedObservation(verify.value),
-      ),
+      // Only the top-level signature decides "unsigned"; unsigned nested
+      // code inside a signed bundle makes the bundle invalid.
+      verification: signatureVerification(verify.value, verifyPath, unsigned),
       stapled_ticket: await stapledTicket(this.target, signal),
       security_facets: deriveSecurityFacets({
         signed: !unsigned,

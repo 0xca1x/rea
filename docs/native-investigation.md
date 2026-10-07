@@ -20,7 +20,7 @@ explicit limitation; architecture inventory locations remain available.
       `linker-signed`, …), slot counts, platform identifier and runtime
       version;
     - sealed resources;
-    - a local `codesign --verify --strict` result, with diagnostics and the
+    - a local `codesign --verify --deep --strict` result, with diagnostics and the
       nested code it validated;
     - whether a notarization ticket is stapled at `Contents/CodeResources`.
       The ticket itself and Apple's notarization record are not checked,

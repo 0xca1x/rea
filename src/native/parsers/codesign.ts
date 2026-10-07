@@ -72,6 +72,7 @@ export const parseCodeSignature = (
       path: null,
       sha256: null,
       size: null,
+      reason: null,
     },
     security_facets: [],
     limitations: unsigned

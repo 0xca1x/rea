@@ -64,47 +64,72 @@ export const stapledTicket = async (
 ): Promise<InspectSignature["stapled_ticket"]> => {
   const bundle = target.sourcePath;
   if (bundle?.toLowerCase().endsWith(".app") !== true)
-    return { status: "not-applicable", path: null, sha256: null, size: null };
+    return {
+      status: "not-applicable",
+      path: null,
+      sha256: null,
+      size: null,
+      reason: null,
+    };
   const relative = "Contents/CodeResources";
   const path = join(bundle, relative);
   try {
     const metadata = await lstat(path);
-    if (!metadata.isFile())
-      return { status: "absent", path: null, sha256: null, size: null };
-  } catch (cause: unknown) {
-    if (
-      cause instanceof Error &&
-      "code" in cause &&
-      (cause.code === "ENOENT" || cause.code === "ENOTDIR")
-    )
-      return { status: "absent", path: null, sha256: null, size: null };
-    throw cause;
-  }
-  const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
-  try {
-    const hash = createHash("sha256");
-    const buffer = new Uint8Array(HASH_CHUNK_BYTES);
-    let size = 0;
-    for (;;) {
-      signal?.throwIfAborted();
-      const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
-      if (bytesRead === 0) break;
-      size += bytesRead;
-      hash.update(buffer.subarray(0, bytesRead));
+    if (!metadata.isFile()) return absent;
+    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    try {
+      const hash = createHash("sha256");
+      const buffer = new Uint8Array(HASH_CHUNK_BYTES);
+      let size = 0;
+      for (;;) {
+        signal?.throwIfAborted();
+        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+        if (bytesRead === 0) break;
+        size += bytesRead;
+        hash.update(buffer.subarray(0, bytesRead));
+      }
+      return {
+        status: "present",
+        path: relative,
+        sha256: hash.digest("hex"),
+        size,
+        reason: null,
+      };
+    } finally {
+      await handle.close();
     }
-    return {
-      status: "present",
-      path: relative,
-      sha256: hash.digest("hex"),
-      size,
-    };
-  } finally {
-    await handle.close();
+  } catch (cause: unknown) {
+    const code = errorCode(cause);
+    if (code === "ENOENT" || code === "ENOTDIR") return absent;
+    // A privacy or ACL denial leaves the ticket's presence unknown, not the
+    // whole signature inspection.
+    if (code === "EACCES" || code === "EPERM")
+      return {
+        status: "unreadable",
+        path: relative,
+        sha256: null,
+        size: null,
+        reason: code,
+      };
+    throw cause;
   }
 };
 
+const absent = {
+  status: "absent",
+  path: null,
+  sha256: null,
+  size: null,
+  reason: null,
+} as const;
+
+const errorCode = (cause: unknown): string | undefined =>
+  cause instanceof Error && "code" in cause && typeof cause.code === "string"
+    ? cause.code
+    : undefined;
+
 /** Limitations that keep verification and notarization claims bounded. */
 export const SIGNATURE_POSTURE_LIMITATIONS = [
-  "Signature verification is local `codesign --verify --strict`; certificate revocation, Gatekeeper policy, and Apple's notarization records are not checked.",
+  "Signature verification is local `codesign --verify --deep --strict`; certificate revocation, Gatekeeper policy, and Apple's notarization records are not checked.",
   "Security facets are derived from CodeDirectory flags and entitlements; runtime policy such as System Integrity Protection, AMFI, and setuid bits can further restrict a process.",
 ];
