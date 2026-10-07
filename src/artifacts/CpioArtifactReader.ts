@@ -10,15 +10,21 @@ import {
 
 /** Longest member name accepted, including its terminating NUL. */
 const MAX_NAME_BYTES = 64 * 1024;
+/** Hard-link bytes are buffered to serve every linked path, within these bounds. */
+const MAX_LINK_BUFFER_BYTES = 16 * 1024 * 1024;
+const MAX_LINK_BUFFER_TOTAL = 64 * 1024 * 1024;
 const TRAILER = "TRAILER!!!";
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
 const S_IFREG = 0o100000;
 const S_IFLNK = 0o120000;
 
+const UNRESOLVED_LINK =
+  "Hard-link bytes are stored with another member of this archive and could not be associated with this path.";
+
 /** Pull exactly the requested bytes from a stream, holding at most one chunk. */
 class ByteSource {
-  readonly #iterator: AsyncIterator<Buffer>;
+  readonly #iterator: AsyncIterator<unknown>;
   #buffer: Buffer = Buffer.alloc(0);
 
   constructor(stream: Readable) {
@@ -26,16 +32,27 @@ class ByteSource {
   }
 
   async #fill(): Promise<boolean> {
-    const next = await this.#iterator.next();
+    let next: IteratorResult<unknown>;
+    try {
+      next = await this.#iterator.next();
+    } catch (cause: unknown) {
+      if (cause instanceof ArtifactReaderFailure) throw cause;
+      throw new ArtifactReaderFailure(
+        "format",
+        "cpio stream is not valid gzip data",
+        { cause },
+      );
+    }
     if (next.done === true) return false;
-    const chunk: unknown = next.value;
-    if (!Buffer.isBuffer(chunk))
+    if (!Buffer.isBuffer(next.value))
       throw new ArtifactReaderFailure(
         "format",
         "cpio stream yielded non-binary data",
       );
     this.#buffer =
-      this.#buffer.length === 0 ? chunk : Buffer.concat([this.#buffer, chunk]);
+      this.#buffer.length === 0
+        ? next.value
+        : Buffer.concat([this.#buffer, next.value]);
     return true;
   }
 
@@ -62,20 +79,21 @@ class ByteSource {
     }
   }
 
-  async skip(length: number, label: string): Promise<void> {
-    for await (const chunk of this.take(length, label)) void chunk;
-  }
-
   async close(): Promise<void> {
     await this.#iterator.return?.();
   }
 }
 
 interface CpioHeader {
-  readonly format: "odc" | "newc";
+  readonly format: "odc" | "newc" | "crc";
   readonly mode: number;
   readonly fileSize: number;
   readonly nameSize: number;
+  readonly links: number;
+  /** Device and inode identifying hard links. */
+  readonly identity: string;
+  /** `c_check` of `070702` archives: the unsigned 32-bit sum of the data bytes. */
+  readonly check: number;
 }
 
 const field = (
@@ -102,18 +120,24 @@ const readHeader = async (source: ByteSource): Promise<CpioHeader> => {
     const rest = await source.read(70, "header");
     return {
       format: "odc",
+      identity: `${field(rest, 0, 6, 8)}:${field(rest, 6, 6, 8)}`,
       mode: field(rest, 12, 6, 8),
+      links: field(rest, 30, 6, 8),
       nameSize: field(rest, 53, 6, 8),
       fileSize: field(rest, 59, 11, 8),
+      check: 0,
     };
   }
   if (magic === "070701" || magic === "070702") {
     const rest = await source.read(104, "header");
     return {
-      format: "newc",
+      format: magic === "070702" ? "crc" : "newc",
+      identity: `${field(rest, 56, 8, 16)}:${field(rest, 64, 8, 16)}:${field(rest, 0, 8, 16)}`,
       mode: field(rest, 8, 8, 16),
+      links: field(rest, 32, 8, 16),
       fileSize: field(rest, 48, 8, 16),
       nameSize: field(rest, 88, 8, 16),
+      check: field(rest, 96, 8, 16),
     };
   }
   throw new ArtifactReaderFailure(
@@ -123,7 +147,7 @@ const readHeader = async (source: ByteSource): Promise<CpioHeader> => {
 };
 
 const padding = (format: CpioHeader["format"], length: number): number =>
-  format === "newc" ? (4 - (length % 4)) % 4 : 0;
+  format === "odc" ? 0 : (4 - (length % 4)) % 4;
 
 /** Normalize a member name; reject absolute and traversing names. */
 const memberPath = (raw: string): string | undefined => {
@@ -138,17 +162,24 @@ const memberPath = (raw: string): string | undefined => {
   return segments.length === 0 ? undefined : segments.join("/");
 };
 
-/** Project one cpio header as an archive-neutral entry. */
+/** Project one cpio member as an archive-neutral entry. */
 const entryOf = (member: {
   readonly path: string;
   readonly kind: ArtifactEntry["kind"];
   readonly key: string;
   readonly header: CpioHeader;
   readonly limitations: readonly string[];
+  readonly size?: number | null;
+  readonly contentUnavailable?: boolean;
 }): ArtifactEntry => ({
   path: member.path,
   kind: member.kind,
-  declaredSize: member.kind === "file" ? member.header.fileSize : null,
+  declaredSize:
+    member.size !== undefined
+      ? member.size
+      : member.kind === "file"
+        ? member.header.fileSize
+        : null,
   compressedSize: null,
   executable: (member.header.mode & 0o111) !== 0,
   encrypted: false,
@@ -157,13 +188,25 @@ const entryOf = (member: {
   unpacked: false,
   limitations: member.limitations,
   adapterKey: member.key,
+  ...(member.contentUnavailable === true ? { contentUnavailable: true } : {}),
 });
+
+interface PendingLink {
+  readonly path: string;
+  readonly key: string;
+  readonly header: CpioHeader;
+}
+
+const drain = async (chunks: AsyncIterable<Buffer>): Promise<void> => {
+  for await (const chunk of chunks) void chunk;
+};
 
 /**
  * Sequential reader for a gzip-compressed cpio archive, such as an installer
  * package's Scripts or Payload. Members are decompressed once, in order: open
- * an entry before advancing to the next one. Device nodes, FIFOs, and sockets
- * are skipped; hard links appear as separate entries.
+ * an entry before advancing to the next one. `070702` data is checked against
+ * its CRC. Hard links whose bytes are stored on another member are served
+ * from that member's bytes; device nodes, FIFOs, and sockets are skipped.
  */
 export class CpioArtifactReader implements ArtifactReader {
   readonly format = "file" as const;
@@ -171,11 +214,15 @@ export class CpioArtifactReader implements ArtifactReader {
   #current:
     | {
         readonly key: string;
-        readonly size: number;
+        readonly path: string;
         readonly header: CpioHeader;
       }
     | undefined;
   #consumed = false;
+  readonly #links = new Map<string, Buffer>();
+  readonly #pending = new Map<string, PendingLink[]>();
+  readonly #aliases = new Map<string, Buffer>();
+  #buffered = 0;
 
   constructor(
     private readonly openCompressed: (
@@ -189,8 +236,12 @@ export class CpioArtifactReader implements ArtifactReader {
     );
     this.#source = source;
     for (let index = 0; ; index++) {
-      signal?.throwIfAborted();
-      await this.#finishCurrent(source);
+      if (signal?.aborted === true)
+        throw new ArtifactReaderFailure(
+          "cancelled",
+          "cpio expansion was cancelled",
+        );
+      yield* this.#finishCurrent(source);
       const header = await readHeader(source);
       if (header.nameSize < 1 || header.nameSize > MAX_NAME_BYTES)
         throw new ArtifactReaderFailure(
@@ -198,64 +249,182 @@ export class CpioArtifactReader implements ArtifactReader {
           "cpio member name size is invalid",
         );
       const nameBytes = await source.read(header.nameSize, "member name");
-      await source.skip(
-        padding(header.format, 110 + header.nameSize),
-        "name padding",
+      await drain(
+        source.take(
+          padding(header.format, 110 + header.nameSize),
+          "name padding",
+        ),
       );
+      const end = nameBytes.indexOf(0);
       const raw = nameBytes.toString(
         "utf8",
         0,
-        nameBytes.indexOf(0) >= 0 ? nameBytes.indexOf(0) : nameBytes.length,
+        end >= 0 ? end : nameBytes.length,
       );
-      if (raw === TRAILER) return;
-      const type = header.mode & S_IFMT;
-      const path = memberPath(raw);
-      const key = `${index}:${raw}`;
-      if (type === S_IFLNK) {
-        const target = (
-          await source.read(header.fileSize, "symlink target")
-        ).toString("utf8");
-        await source.skip(
-          padding(header.format, header.fileSize),
-          "data padding",
-        );
-        if (path !== undefined)
-          yield entryOf({
-            path,
-            kind: "symlink",
-            key,
-            header,
-            limitations: [`Symlink target: ${target}`],
-          });
-        continue;
+      if (raw === TRAILER) {
+        yield* this.#unresolvedLinks();
+        return;
       }
-      this.#current = { key, size: header.fileSize, header };
-      this.#consumed = false;
-      if (path === undefined || (type !== S_IFREG && type !== S_IFDIR))
-        continue;
-      yield entryOf({
-        path,
-        kind: type === S_IFDIR ? "directory" : "file",
-        key,
-        header,
-        limitations: [],
-      });
+      yield* this.#member(source, header, raw, `${index}:${raw}`);
     }
   }
 
-  /** Skip whatever the caller did not read of the current member. */
-  async #finishCurrent(source: ByteSource): Promise<void> {
+  async *#member(
+    source: ByteSource,
+    header: CpioHeader,
+    raw: string,
+    key: string,
+  ): AsyncGenerator<ArtifactEntry> {
+    const type = header.mode & S_IFMT;
+    const path = memberPath(raw);
+    if (type === S_IFLNK) {
+      const target = await this.#collect(source, header, raw);
+      if (path !== undefined)
+        yield entryOf({
+          path,
+          kind: "symlink",
+          key,
+          header,
+          limitations: [`Symlink target: ${target.toString("utf8")}`],
+        });
+      return;
+    }
+    if (
+      path !== undefined &&
+      type === S_IFREG &&
+      header.links > 1 &&
+      header.fileSize === 0
+    ) {
+      const stored = this.#links.get(header.identity);
+      if (stored !== undefined) {
+        yield this.#alias(path, key, header, stored);
+        return;
+      }
+      // newc stores a hard link's bytes on its last member; wait for them.
+      const waiting = this.#pending.get(header.identity) ?? [];
+      waiting.push({ path, key, header });
+      this.#pending.set(header.identity, waiting);
+      return;
+    }
+    this.#current = { key, path: raw, header };
+    this.#consumed = false;
+    if (path === undefined || (type !== S_IFREG && type !== S_IFDIR)) return;
+    yield entryOf({
+      path,
+      kind: type === S_IFDIR ? "directory" : "file",
+      key,
+      header,
+      limitations: [],
+    });
+  }
+
+  #alias(
+    path: string,
+    key: string,
+    header: CpioHeader,
+    bytes: Buffer,
+  ): ArtifactEntry {
+    this.#aliases.set(key, bytes);
+    return entryOf({
+      path,
+      kind: "file",
+      key,
+      header,
+      size: bytes.length,
+      limitations: [
+        "Hard link: bytes are stored with another member of this archive.",
+      ],
+    });
+  }
+
+  *#unresolvedLinks(): Generator<ArtifactEntry> {
+    for (const links of this.#pending.values())
+      for (const { path, key, header } of links)
+        yield entryOf({
+          path,
+          kind: "file",
+          key,
+          header,
+          size: null,
+          limitations: [UNRESOLVED_LINK],
+          contentUnavailable: true,
+        });
+    this.#pending.clear();
+  }
+
+  /** Finish the current member, then serve hard links that were waiting for it. */
+  async *#finishCurrent(source: ByteSource): AsyncGenerator<ArtifactEntry> {
     const current = this.#current;
     if (current === undefined) return;
     this.#current = undefined;
-    if (!this.#consumed) await source.skip(current.size, "member data");
-    await source.skip(
-      padding(current.header.format, current.size),
-      "data padding",
+    if (!this.#consumed) {
+      if (this.#shouldKeep(current.header))
+        this.#remember(
+          current.header,
+          await this.#collect(source, current.header, current.path),
+        );
+      else await drain(this.#verified(source, current.header, current.path));
+    }
+    const waiting = this.#pending.get(current.header.identity);
+    const stored = this.#links.get(current.header.identity);
+    if (waiting === undefined || stored === undefined) return;
+    this.#pending.delete(current.header.identity);
+    for (const { path, key, header } of waiting)
+      yield this.#alias(path, key, header, stored);
+  }
+
+  #shouldKeep(header: CpioHeader): boolean {
+    return (
+      (header.mode & S_IFMT) === S_IFREG &&
+      header.links > 1 &&
+      header.fileSize > 0 &&
+      header.fileSize <= MAX_LINK_BUFFER_BYTES &&
+      this.#buffered + header.fileSize <= MAX_LINK_BUFFER_TOTAL
     );
   }
 
+  #remember(header: CpioHeader, bytes: Buffer): void {
+    if (this.#links.has(header.identity)) return;
+    this.#links.set(header.identity, bytes);
+    this.#buffered += bytes.length;
+  }
+
+  /** Member data and its padding, checked against a `070702` CRC. */
+  async *#verified(
+    source: ByteSource,
+    header: CpioHeader,
+    path: string,
+  ): AsyncGenerator<Buffer> {
+    let sum = 0;
+    for await (const chunk of source.take(header.fileSize, "member data")) {
+      if (header.format === "crc")
+        for (const byte of chunk) sum = (sum + byte) >>> 0;
+      yield chunk;
+    }
+    if (header.format === "crc" && sum !== header.check)
+      throw new ArtifactReaderFailure(
+        "integrity",
+        `cpio CRC disagrees with content: ${path}`,
+      );
+    await drain(
+      source.take(padding(header.format, header.fileSize), "data padding"),
+    );
+  }
+
+  async #collect(
+    source: ByteSource,
+    header: CpioHeader,
+    path: string,
+  ): Promise<Buffer> {
+    const chunks: Buffer[] = [];
+    for await (const chunk of this.#verified(source, header, path))
+      chunks.push(chunk);
+    return Buffer.concat(chunks);
+  }
+
   open(entry: ArtifactEntry): Promise<Readable> {
+    const alias = this.#aliases.get(entry.adapterKey);
+    if (alias !== undefined) return Promise.resolve(Readable.from([alias]));
     const source = this.#source;
     const current = this.#current;
     if (
@@ -267,12 +436,30 @@ export class CpioArtifactReader implements ArtifactReader {
       return Promise.reject(
         new ArtifactReaderFailure(
           "unavailable",
-          "cpio members can be read only once, in archive order",
+          entry.contentUnavailable === true
+            ? UNRESOLVED_LINK
+            : "cpio members can be read only once, in archive order",
         ),
       );
     this.#consumed = true;
+    const chunks = this.#verified(source, current.header, current.path);
+    if (!this.#shouldKeep(current.header))
+      return Promise.resolve(Readable.from(chunks));
+    // Keep a linked member's bytes for paths that share them.
+    const kept: Buffer[] = [];
+    const remember = (): void => {
+      this.#remember(current.header, Buffer.concat(kept));
+    };
     return Promise.resolve(
-      Readable.from(source.take(current.size, "member data")),
+      Readable.from(
+        (async function* () {
+          for await (const chunk of chunks) {
+            kept.push(chunk);
+            yield chunk;
+          }
+          remember();
+        })(),
+      ),
     );
   }
 

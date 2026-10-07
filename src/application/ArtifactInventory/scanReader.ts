@@ -193,7 +193,11 @@ const digestArtifactEntry = async (
 ): Promise<
   { readonly node: ArtifactNode; readonly mismatched: boolean } | undefined
 > => {
-  if ((entry.kind !== "file" && entry.kind !== "slice") || entry.encrypted)
+  if (
+    (entry.kind !== "file" && entry.kind !== "slice") ||
+    entry.encrypted ||
+    entry.contentUnavailable === true
+  )
     return undefined;
   const digest = await hashReadable(
     await currentReader.open(entry, context.signal),

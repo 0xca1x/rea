@@ -1,6 +1,11 @@
 import { createHash, type Hash } from "node:crypto";
 import { open, type FileHandle } from "node:fs/promises";
-import { Readable, Transform, type TransformCallback } from "node:stream";
+import {
+  PassThrough,
+  Readable,
+  Transform,
+  type TransformCallback,
+} from "node:stream";
 import { createInflate, inflateSync } from "node:zlib";
 
 import { DOMParser, type Element, type Node } from "@xmldom/xmldom";
@@ -22,6 +27,17 @@ const CHECKSUM_ALGORITHMS: Readonly<Record<string, string>> = {
   md5: "md5",
   sha256: "sha256",
   sha512: "sha512",
+};
+const DIGEST_BYTES: Readonly<Record<string, number>> = {
+  sha1: 20,
+  md5: 16,
+  sha256: 32,
+  sha512: 64,
+};
+
+const cancelled = (signal?: AbortSignal): void => {
+  if (signal?.aborted === true)
+    throw new ArtifactReaderFailure("cancelled", "PKG traversal was cancelled");
 };
 
 /** One TOC `<data>` element: where a member's archived bytes live in the heap. */
@@ -191,7 +207,7 @@ export class XarArtifactReader implements ArtifactReader {
 
   async #load(signal?: AbortSignal): Promise<void> {
     if (this.#handle !== undefined) return;
-    signal?.throwIfAborted();
+    cancelled(signal);
     const handle = await open(this.path, "r");
     this.#handle = handle;
     const header = Buffer.alloc(28);
@@ -251,12 +267,19 @@ export class XarArtifactReader implements ArtifactReader {
   /** The TOC checksum in the heap covers the compressed TOC bytes. */
   async #verifyToc(toc: Element, compressed: Buffer): Promise<void> {
     const checksum = childElement(toc, "checksum");
-    const algorithm =
-      CHECKSUM_ALGORITHMS[checksum?.getAttribute("style")?.toLowerCase() ?? ""];
+    const style = checksum?.getAttribute("style")?.toLowerCase() ?? "";
+    const algorithm = CHECKSUM_ALGORITHMS[style];
     if (checksum === undefined || algorithm === undefined) return;
+    const size = integer(textOf(checksum, "size"), "checksum size");
+    // The stored checksum is exactly one digest; never allocate a declared size.
+    if (size !== DIGEST_BYTES[style])
+      throw new ArtifactReaderFailure(
+        "format",
+        `xar TOC declares a ${size}-byte ${style} checksum`,
+      );
     const stored = await this.#heapBytes(
       integer(textOf(checksum, "offset"), "checksum offset"),
-      integer(textOf(checksum, "size"), "checksum size"),
+      size,
     );
     if (!createHash(algorithm).update(compressed).digest().equals(stored))
       throw new ArtifactReaderFailure(
@@ -325,7 +348,7 @@ export class XarArtifactReader implements ArtifactReader {
   async *entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry> {
     await this.#load(signal);
     for (const member of this.#members) {
-      signal?.throwIfAborted();
+      cancelled(signal);
       const classified =
         member.kind === "file"
           ? await this.#nestedArchive(member)
@@ -359,6 +382,7 @@ export class XarArtifactReader implements ArtifactReader {
   }
 
   async open(entry: ArtifactEntry, signal?: AbortSignal): Promise<Readable> {
+    cancelled(signal);
     await this.#load(signal);
     const member = this.#members.find(({ path }) => path === entry.adapterKey);
     if (member === undefined || member.kind !== "file")
@@ -371,19 +395,26 @@ export class XarArtifactReader implements ArtifactReader {
     const raw = Readable.from(this.#chunks(data.offset, data.length, signal));
     let decoded: Readable;
     if (data.encoding === "application/octet-stream") decoded = raw;
-    else if (data.encoding === "application/x-gzip")
+    else if (data.encoding === "application/x-gzip") {
       // xar's "x-gzip" members are zlib streams.
-      decoded = raw.pipe(createInflate());
-    else
+      const inflate = createInflate();
+      raw.on("error", (cause: unknown) =>
+        inflate.destroy(memberFailure(entry.path, cause)),
+      );
+      decoded = raw.pipe(inflate);
+    } else
       throw new ArtifactReaderFailure(
         "format",
         `xar member ${entry.path} uses unsupported encoding ${data.encoding}`,
       );
     const checksum = data.extractedChecksum;
-    if (checksum === undefined) return decoded;
-    const verified = new ChecksumVerifier(entry.path, checksum);
+    const verified =
+      checksum === undefined
+        ? new PassThrough()
+        : new ChecksumVerifier(entry.path, checksum);
+    // Decoder errors become tagged failures; cancellation stays tagged.
     decoded.on("error", (cause: unknown) =>
-      verified.destroy(cause instanceof Error ? cause : undefined),
+      verified.destroy(memberFailure(entry.path, cause)),
     );
     return decoded.pipe(verified);
   }
@@ -394,7 +425,7 @@ export class XarArtifactReader implements ArtifactReader {
     signal?: AbortSignal,
   ): AsyncGenerator<Buffer> {
     for (let done = 0; done < length;) {
-      signal?.throwIfAborted();
+      cancelled(signal);
       const size = Math.min(READ_CHUNK_BYTES, length - done);
       yield await this.#heapBytes(offset + done, size);
       done += size;
@@ -411,3 +442,13 @@ export class XarArtifactReader implements ArtifactReader {
     await handle?.close();
   }
 }
+
+/** Keep tagged failures; any other decoder error means malformed member bytes. */
+const memberFailure = (path: string, cause: unknown): ArtifactReaderFailure =>
+  cause instanceof ArtifactReaderFailure
+    ? cause
+    : new ArtifactReaderFailure(
+        "format",
+        `xar member ${path} could not be decoded`,
+        { cause },
+      );

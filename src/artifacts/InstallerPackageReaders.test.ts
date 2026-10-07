@@ -223,3 +223,161 @@ describe("gzip cpio reader", () => {
     await reader.close();
   });
 });
+
+describe("installer package reader hardening", () => {
+  it("refuses a TOC checksum whose declared size is not one digest", async () => {
+    const reader = new XarArtifactReader(
+      await writePackage(
+        xarArchive([{ name: "Bom", data: Buffer.from("bom") }], {
+          tocChecksumSize: 0x7fffffff,
+        }),
+      ),
+    );
+    await expect(collect(reader)).rejects.toMatchObject({
+      reason: "format",
+      message: "xar TOC declares a 2147483647-byte sha1 checksum",
+    });
+    await reader.close();
+  });
+
+  it("reports corrupt zlib members as malformed and keeps cancellation tagged", async () => {
+    const reader = new XarArtifactReader(
+      await writePackage(
+        xarArchive([
+          {
+            name: "PackageInfo",
+            data: Buffer.from("<pkg-info/>"),
+            encoding: "zlib",
+            archived: Buffer.from("not zlib at all"),
+          },
+        ]),
+      ),
+    );
+    try {
+      const [entry] = await collect(reader);
+      if (entry === undefined) throw new Error("missing entry");
+      await expect(buffer(await reader.open(entry))).rejects.toMatchObject({
+        reason: "format",
+      });
+      const controller = new AbortController();
+      controller.abort();
+      await expect(reader.open(entry, controller.signal)).rejects.toMatchObject(
+        {
+          reason: "cancelled",
+        },
+      );
+    } finally {
+      await reader.close();
+    }
+  });
+});
+
+describe("cpio hard links and CRC archives", () => {
+  const readAll = async (archive: Uint8Array) => {
+    const reader = new CpioArtifactReader(() =>
+      Promise.resolve(Readable.from([archive])),
+    );
+    const files: Record<string, string | undefined> = {};
+    try {
+      for await (const entry of reader.entries())
+        if (entry.kind === "file")
+          files[entry.path] =
+            entry.contentUnavailable === true
+              ? undefined
+              : (await buffer(await reader.open(entry))).toString();
+    } finally {
+      await reader.close();
+    }
+    return files;
+  };
+
+  it("serves newc hard links stored on the last member to every path", async () => {
+    expect(
+      await readAll(
+        gzipCpio(
+          [
+            { name: "./first", mode: MODE.file, ino: 7, links: 2 },
+            {
+              name: "./second",
+              mode: MODE.file,
+              ino: 7,
+              links: 2,
+              data: "shared",
+            },
+            {
+              name: "./third",
+              mode: MODE.file,
+              ino: 9,
+              links: 2,
+              data: "kept",
+            },
+            { name: "./fourth", mode: MODE.file, ino: 9, links: 2 },
+          ],
+          "newc",
+        ),
+      ),
+    ).toEqual({
+      first: "shared",
+      second: "shared",
+      third: "kept",
+      fourth: "kept",
+    });
+  });
+
+  it("reports a hard link whose bytes never appear as unavailable", async () => {
+    const reader = new CpioArtifactReader(() =>
+      Promise.resolve(
+        Readable.from([
+          gzipCpio(
+            [{ name: "./orphan", mode: MODE.file, ino: 4, links: 2 }],
+            "newc",
+          ),
+        ]),
+      ),
+    );
+    const entries = await collect(reader);
+    expect(entries).toEqual([
+      expect.objectContaining({
+        path: "orphan",
+        contentUnavailable: true,
+        declaredSize: null,
+      }),
+    ]);
+    const orphan = entries[0];
+    if (orphan === undefined) throw new Error("missing entry");
+    await expect(reader.open(orphan)).rejects.toMatchObject({
+      reason: "unavailable",
+    });
+    await reader.close();
+  });
+
+  it("verifies 070702 member checksums whether or not members are opened", async () => {
+    expect(
+      await readAll(
+        gzipCpio([{ name: "./ok", mode: MODE.file, data: "abc" }], "crc"),
+      ),
+    ).toEqual({ ok: "abc" });
+    await expect(
+      readAll(
+        gzipCpio(
+          [{ name: "./bad", mode: MODE.file, data: "abc", check: 1 }],
+          "crc",
+        ),
+      ),
+    ).rejects.toMatchObject({ reason: "integrity" });
+    const reader = new CpioArtifactReader(() =>
+      Promise.resolve(
+        Readable.from([
+          gzipCpio(
+            [{ name: "./bad", mode: MODE.file, data: "abc", check: 1 }],
+            "crc",
+          ),
+        ]),
+      ),
+    );
+    await expect(collect(reader)).rejects.toMatchObject({
+      reason: "integrity",
+    });
+    await reader.close();
+  });
+});

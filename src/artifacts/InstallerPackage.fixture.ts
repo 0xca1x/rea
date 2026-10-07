@@ -11,6 +11,8 @@ export interface XarFixtureMember {
   readonly mode?: string;
   /** Replace the declared extracted checksum, to model tampering. */
   readonly extractedSha1?: string;
+  /** Store these bytes instead of encoding `data`, to model corrupt members. */
+  readonly archived?: Uint8Array;
   readonly children?: readonly XarFixtureMember[];
 }
 
@@ -23,7 +25,11 @@ const escape = (text: string): string =>
 /** Build a xar archive with a SHA-1 TOC checksum and per-member checksums. */
 export const xarArchive = (
   members: readonly XarFixtureMember[],
-  options: { readonly corruptTocChecksum?: boolean } = {},
+  options: {
+    readonly corruptTocChecksum?: boolean;
+    /** Declared TOC checksum size; the real digest is 20 bytes. */
+    readonly tocChecksumSize?: number;
+  } = {},
 ): Uint8Array => {
   const heap: Uint8Array[] = [new Uint8Array(20)];
   let heapLength = 20;
@@ -34,7 +40,8 @@ export const xarArchive = (
     let data = "";
     if (type === "file" && member.data !== undefined) {
       const archived =
-        member.encoding === "zlib" ? deflateSync(member.data) : member.data;
+        member.archived ??
+        (member.encoding === "zlib" ? deflateSync(member.data) : member.data);
       const offset = heapLength;
       heap.push(archived);
       heapLength += archived.length;
@@ -55,7 +62,7 @@ export const xarArchive = (
   };
   const files = members.map(fileXml).join("");
   const toc = Buffer.from(
-    `<?xml version="1.0" encoding="UTF-8"?><xar><toc><checksum style="sha1"><size>20</size><offset>0</offset></checksum>${files}</toc></xar>`,
+    `<?xml version="1.0" encoding="UTF-8"?><xar><toc><checksum style="sha1"><size>${options.tocChecksumSize ?? 20}</size><offset>0</offset></checksum>${files}</toc></xar>`,
   );
   const compressed = deflateSync(toc);
   const checksum = createHash("sha1").update(compressed).digest();
@@ -76,6 +83,10 @@ export interface CpioFixtureMember {
   readonly name: string;
   readonly mode: number;
   readonly data?: Uint8Array | string;
+  readonly ino?: number;
+  readonly links?: number;
+  /** Override a crc archive's c_check, to model corruption. */
+  readonly check?: number;
 }
 
 const octal = (value: number, width: number): string =>
@@ -85,11 +96,11 @@ const hex = (value: number): string => value.toString(16).padStart(8, "0");
 /** Build a gzip-compressed odc or newc cpio archive ending in its trailer. */
 export const gzipCpio = (
   members: readonly CpioFixtureMember[],
-  format: "odc" | "newc" = "odc",
+  format: "odc" | "newc" | "crc" = "odc",
 ): Uint8Array => {
   const parts: Buffer[] = [];
   const pad = (length: number): void => {
-    if (format === "newc" && length % 4 !== 0)
+    if (format !== "odc" && length % 4 !== 0)
       parts.push(Buffer.alloc(4 - (length % 4)));
   };
   for (const member of [...members, { name: "TRAILER!!!", mode: 0 }]) {
@@ -98,10 +109,14 @@ export const gzipCpio = (
         ? Buffer.from(member.data)
         : Buffer.from(member.data ?? new Uint8Array());
     const name = Buffer.from(`${member.name}\0`);
+    const ino = "ino" in member ? (member.ino ?? 1) : 1;
+    const links = "links" in member ? (member.links ?? 1) : 1;
+    const sum = [...data].reduce((total, byte) => (total + byte) >>> 0, 0);
+    const check = "check" in member ? (member.check ?? sum) : sum;
     if (format === "odc")
       parts.push(
         Buffer.from(
-          `070707${octal(0, 6)}${octal(1, 6)}${octal(member.mode, 6)}${octal(0, 6)}${octal(0, 6)}${octal(1, 6)}${octal(0, 6)}${octal(0, 11)}${octal(name.length, 6)}${octal(data.length, 11)}`,
+          `070707${octal(0, 6)}${octal(ino, 6)}${octal(member.mode, 6)}${octal(0, 6)}${octal(0, 6)}${octal(links, 6)}${octal(0, 6)}${octal(0, 11)}${octal(name.length, 6)}${octal(data.length, 11)}`,
         ),
         name,
         data,
@@ -109,7 +124,7 @@ export const gzipCpio = (
     else {
       parts.push(
         Buffer.from(
-          `070701${hex(1)}${hex(member.mode)}${hex(0)}${hex(0)}${hex(1)}${hex(0)}${hex(data.length)}${hex(0)}${hex(0)}${hex(0)}${hex(0)}${hex(name.length)}${hex(0)}`,
+          `${format === "crc" ? "070702" : "070701"}${hex(ino)}${hex(member.mode)}${hex(0)}${hex(0)}${hex(links)}${hex(0)}${hex(data.length)}${hex(0)}${hex(0)}${hex(0)}${hex(0)}${hex(name.length)}${hex(format === "crc" ? check : 0)}`,
         ),
         name,
       );

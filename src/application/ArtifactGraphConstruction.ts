@@ -50,7 +50,10 @@ export const createOccurrence = (
   compressed_size: entry.compressedSize,
   executable: entry.executable,
   encrypted: entry.encrypted,
-  hash_status: entry.encrypted ? "unavailable" : "not-hashed",
+  hash_status:
+    entry.encrypted || entry.contentUnavailable === true
+      ? "unavailable"
+      : "not-hashed",
   source_location:
     entry.byteOffset === null || entry.declaredSize === null
       ? null

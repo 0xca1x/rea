@@ -117,4 +117,34 @@ describe("installer package inventory", () => {
       details: { reason: "integrity" },
     });
   });
+
+  it("records an unresolved hard link as unavailable instead of empty", async () => {
+    const directory = await createTestTempDirectory("rea-pkg-hardlink-");
+    const path = join(directory, "Installer.pkg");
+    await writeFile(
+      path,
+      xarArchive([
+        {
+          name: "Payload",
+          data: gzipCpio(
+            [{ name: "./orphan", mode: MODE.file, ino: 3, links: 2 }],
+            "newc",
+          ),
+        },
+      ]),
+    );
+    const inventory = artifactInventoryResultSchema.parse(
+      parseEvidence(await runProviderAnalysis(path, "inventory_artifact", {}))
+        .normalized_result,
+    );
+    expect(
+      inventory.occurrences.find(
+        ({ logical_path: logical }) => logical === "Payload/orphan",
+      ),
+    ).toMatchObject({
+      artifact_id: null,
+      hash_status: "unavailable",
+      limitations: [expect.stringContaining("Hard-link bytes")],
+    });
+  });
 });
