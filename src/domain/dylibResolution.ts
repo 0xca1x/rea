@@ -139,6 +139,7 @@ const findingSchema = z.strictObject({
   kind: z.enum([
     "required-load-unresolved",
     "weak-load-unresolved",
+    "lazy-load-unresolved",
     "earlier-rpath-candidate-absent",
     "dyld-environment-present",
   ]),
@@ -409,6 +410,8 @@ const traceProcess = async (
     for (const dependency of current.slice.dependencies) {
       const edge = await resolveDependency(dependency, loader, context);
       edges.push(edge);
+      // dyld loads LC_LAZY_LOAD_DYLIB images on first use, not at launch.
+      if (dependency.command === "LC_LAZY_LOAD_DYLIB") continue;
       const image = edge.resolution.image;
       if (image === null || context.loaded.has(image)) continue;
       const facts = context.images.get(image);

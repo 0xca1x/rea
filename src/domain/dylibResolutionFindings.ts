@@ -15,15 +15,7 @@ export const deriveFindings = (
   const findings: Finding[] = [];
   edges.forEach((edge, index) => {
     if (edge.resolution.status === "unresolved")
-      findings.push({
-        kind: edge.weak ? "weak-load-unresolved" : "required-load-unresolved",
-        edge_index: index,
-        image: edge.loader,
-        basis: "derived",
-        explanation: edge.weak
-          ? `No candidate for weak dependency ${edge.install_name} exists in the analyzed root; dyld continues without it.`
-          : `No candidate for ${edge.install_name} exists in the analyzed root; dyld would fail to launch ${edge.root} (${edge.architecture}) unless the image is supplied elsewhere.`,
-      });
+      findings.push(unresolvedFinding(edge, index));
     const resolvedAt = edge.candidates.findIndex(
       ({ outcome }) => outcome === "resolved" || outcome === "shared-cache",
     );
@@ -61,7 +53,33 @@ export const deriveFindings = (
   return findings;
 };
 
+const unresolvedFinding = (edge: Edge, index: number): Finding => {
+  const base = {
+    edge_index: index,
+    image: edge.loader,
+    basis: "derived",
+  } as const;
+  if (edge.command === "LC_LAZY_LOAD_DYLIB")
+    return {
+      ...base,
+      kind: "lazy-load-unresolved",
+      explanation: `No candidate for lazily loaded ${edge.install_name} exists in the analyzed root; dyld loads it on first use, which would fail unless the image is supplied elsewhere.`,
+    };
+  return edge.weak
+    ? {
+        ...base,
+        kind: "weak-load-unresolved",
+        explanation: `No candidate for weak dependency ${edge.install_name} exists in the analyzed root; dyld continues without it.`,
+      }
+    : {
+        ...base,
+        kind: "required-load-unresolved",
+        explanation: `No candidate for ${edge.install_name} exists in the analyzed root; dyld would fail to launch ${edge.root} (${edge.architecture}) unless the image is supplied elsewhere.`,
+      };
+};
+
 export const DYLIB_RESOLUTION_LIMITATIONS = [
+  "LC_LAZY_LOAD_DYLIB dependencies are resolved but not traversed, because dyld loads them only on first use.",
   "Slices are matched by dyld's graded architectures (an x86_64h process also loads x86_64). arm64e processes that disable pointer authentication can also load arm64 slices; that fallback is not modeled.",
   "Absolute install names and rpaths are outside the analyzed root and are not evaluated, including /System and /usr/lib libraries that the dyld shared cache usually provides.",
   "Leaf and relative install names depend on dyld fallback paths, DYLD_* variables, and the working directory; they are undetermined.",
