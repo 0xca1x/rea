@@ -27,13 +27,16 @@ const dylib = (installName: string, dependencies: readonly Uint8Array[] = []) =>
     commands: [dylibCommand(LC.ID_DYLIB, installName), ...dependencies],
   });
 
-const writeCache = async (fixture: CacheFixture): Promise<string> => {
+const writeCache = async (
+  fixture: CacheFixture,
+  name = "dyld_shared_cache_arm64e",
+): Promise<string> => {
   const directory = await createTestTempDirectory("rea-dyld-cache-");
-  const path = join(directory, "dyld_shared_cache_arm64e");
-  await writeFile(path, fixture.main);
+  const base = join(directory, "dyld_shared_cache_arm64e");
+  await writeFile(join(directory, name), fixture.main);
   for (const { suffix, bytes } of fixture.subcaches)
-    await writeFile(`${path}${suffix}`, bytes);
-  return path;
+    await writeFile(`${base}${suffix}`, bytes);
+  return join(directory, name);
 };
 
 const IMAGES = [
@@ -119,6 +122,21 @@ describe("dyld shared cache inspection", () => {
     expect(without.ok && without.value.subcaches[0]).toMatchObject({
       status: "missing",
       observed_uuid: null,
+    });
+  });
+
+  it("finds a development cache's subcaches beside its base name", async () => {
+    const path = await writeCache(
+      dyldCacheFixture(IMAGES),
+      "dyld_shared_cache_arm64e.development",
+    );
+    const result = await inspectDyldSharedCache({
+      cache_path: path,
+      images: ["/usr/lib/swift/libswiftCore.dylib"],
+    });
+    expect(result.ok && result.value).toMatchObject({
+      subcaches: [{ suffix: ".01", status: "present" }],
+      inspected_images: [{ status: "parsed", file: ".01" }],
     });
   });
 

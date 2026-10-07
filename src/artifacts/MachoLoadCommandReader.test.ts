@@ -4,6 +4,7 @@ import {
   CPU,
   FILE_TYPE,
   LC,
+  buildVersionCommand,
   codeSignatureCommand,
   dyldEnvironmentCommand,
   dylibCommand,
@@ -40,6 +41,9 @@ describe("Mach-O load command reader", () => {
         rpathCommand("/usr/lib/swift"),
         dyldEnvironmentCommand("DYLD_FRAMEWORK_PATH=@executable_path"),
         codeSignatureCommand(),
+        // A zippered image builds for macOS and Mac Catalyst.
+        buildVersionCommand(1),
+        buildVersionCommand(6),
       ],
     });
     const facts = await read(image);
@@ -54,6 +58,10 @@ describe("Mach-O load command reader", () => {
       rpaths: ["@loader_path/Frameworks", "/usr/lib/swift"],
       dyld_environment: ["DYLD_FRAMEWORK_PATH=@executable_path"],
       code_signature_present: true,
+      platforms: [
+        { id: 1, name: "macos" },
+        { id: 6, name: "maccatalyst" },
+      ],
     });
     expect(
       slice?.dependencies.map(
@@ -166,6 +174,27 @@ describe("Mach-O load command reader", () => {
 });
 
 describe("Mach-O load command reader inputs", () => {
+  it("reads platforms from LC_VERSION_MIN_* and keeps unknown ids", async () => {
+    const versionMin = new Uint8Array(16);
+    const view = new DataView(versionMin.buffer);
+    view.setUint32(0, 0x25, true);
+    view.setUint32(4, 16, true);
+    const facts = await read(
+      machoImage({ commands: [versionMin, buildVersionCommand(99)] }),
+    );
+    expect(facts.status === "parsed" && facts.slices[0]?.platforms).toEqual([
+      { id: 2, name: "ios" },
+      { id: 99, name: null },
+    ]);
+    const short = new Uint8Array(8);
+    new DataView(short.buffer).setUint32(0, LC.BUILD_VERSION, true);
+    new DataView(short.buffer).setUint32(4, 8, true);
+    expect(await read(machoImage({ commands: [short] }))).toEqual({
+      status: "malformed",
+      reason: "load command 0 is too short for a platform version",
+    });
+  });
+
   it("names 32-bit and non-Mach-O inputs without guessing", async () => {
     const i386 = await read(
       machoImage({ cpu: { type: 7, subtype: 3 }, wide: false }),

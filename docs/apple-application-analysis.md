@@ -154,13 +154,13 @@ parser coverage, such as big-endian images), `architecture-missing`,
 `outside-target`, `shared-cache`, `escapes-target`, or `undetermined`. Slices follow dyld's
 graded architectures, so an `x86_64h` process also loads `x86_64`. The edge's `resolution` is one of:
 
-| Status         | Meaning                                                                                                                                                                                                                       |
-| -------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `resolved`     | An image inside the analyzed root loads, and no earlier candidate was undeterminable.                                                                                                                                         |
-| `conditional`  | An image inside the root resolves, but an earlier candidate outside the root (for example `/usr/lib/swift`) would win if it exists on the running system.                                                                     |
-| `unresolved`   | Every candidate is definitively absent or unusable inside the root.                                                                                                                                                           |
-| `undetermined` | No candidate resolves inside the root, and some candidate lies outside it or depends on the environment.                                                                                                                      |
-| `shared-cache` | An absolute install path, or an `@rpath` candidate outside the root, was found in the dyld shared cache passed as `shared_cache` (CLI `--shared-cache`). dyld loads the cached image, so later in-root candidates are unused. |
+| Status         | Meaning                                                                                                                                                                                                                                |
+| -------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `resolved`     | An image inside the analyzed root loads, and no earlier candidate was undeterminable.                                                                                                                                                  |
+| `conditional`  | An image inside the root, or in the supplied shared cache, resolves, but an earlier candidate that REA cannot decide (for example `/opt/vendor/lib` or `/usr/lib/swift` without a cache) would win if it exists on the running system. |
+| `unresolved`   | Every candidate is definitively absent or unusable inside the root.                                                                                                                                                                    |
+| `undetermined` | No candidate resolves inside the root, and some candidate lies outside it or depends on the environment.                                                                                                                               |
+| `shared-cache` | An absolute install path, or an `@rpath` candidate outside the root, was found in the dyld shared cache passed as `shared_cache` (CLI `--shared-cache`). dyld loads the cached image, so later in-root candidates are unused.          |
 
 Absolute install names such as `/usr/lib/libSystem.B.dylib` are
 `outside-target`. On macOS 11 and later most of them live in the dyld shared
@@ -180,11 +180,22 @@ cache rather than on disk, so REA does not check them against the host.
 image. It also compares the predicted load order of two process roots with the
 images dyld actually loads (`DYLD_PRINT_LIBRARIES`).
 
-With `shared_cache`, absolute candidates are looked up in that cache's image list.
-This only happens when the cache serves the process's CPU family: an arm64e
-cache serves arm64 and arm64e processes. The result's `shared_cache` names the
-cache path, UUID, architecture and OS version. Cached images are not traversed.
-Without a cache, system paths stay `undetermined`.
+With `shared_cache`, absolute candidates are looked up in that cache's image
+list. A process uses the cache only when both of these hold:
+
+- the cache serves its CPU family (an arm64e cache serves arm64 and arm64e);
+- one of its `LC_BUILD_VERSION` or `LC_VERSION_MIN_*` platforms (reported per
+  slice as `platforms`) matches the cache's platform or alternate platform.
+
+An iOS cache extracted from an IPSW is therefore not used for a macOS
+executable. A limitation names each process root the cache was not used for,
+and why. The result's `shared_cache` names the cache path, UUID, architecture
+and OS version. Cached images are not traversed.
+
+An image listed in the cache but mapped in a missing or UUID-mismatched
+subcache is `undetermined`. It is listed in
+`coverage.unverified_shared_cache_images` and makes coverage partial. Without a
+cache, system paths stay `undetermined`.
 
 ## dyld shared cache
 

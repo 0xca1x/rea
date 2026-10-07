@@ -19,6 +19,14 @@ import {
 const exec = promisify(execFile);
 
 await preflightMacosBundleFixture();
+try {
+  await exec("/usr/bin/xcrun", ["--find", "dyld_info"]);
+} catch (cause) {
+  throw new Error(
+    "dyld shared cache verification requires dyld_info from Command Line Tools (xcrun --find dyld_info failed)",
+    { cause },
+  );
+}
 
 /** The cache this host's dyld uses for native processes. */
 const hostCache = async () => {

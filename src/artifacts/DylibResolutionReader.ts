@@ -8,6 +8,7 @@ import {
   dylibResolutionResultSchema,
   traceDylibLoading,
   type DylibResolutionResult,
+  type DylibSharedCacheView,
   type DylibTreeEntry,
   type DylibTreeView,
   type MachoImageFacts,
@@ -167,9 +168,15 @@ const openSharedCache = async (
   }
 };
 
-const sharedCacheView = (cache: DyldSharedCache) => ({
+const sharedCacheView = (cache: DyldSharedCache): DylibSharedCacheView => ({
   architecture: cache.header.architecture,
-  has: (path: string): boolean => cache.find(path) !== undefined,
+  platforms: [cache.header.platform, cache.header.alt_platform].filter(
+    (platform) => platform !== null,
+  ),
+  unavailableSubcaches: cache.header.subcaches
+    .filter(({ status }) => status !== "present")
+    .map(({ suffix, status }) => `${suffix} (${status})`),
+  lookup: (path) => cache.locate(path),
 });
 
 /**

@@ -1,5 +1,6 @@
 import { open, type FileHandle } from "node:fs/promises";
 
+import { applePlatform } from "../domain/applePlatforms.js";
 import type { MachoImageFacts } from "../domain/dylibResolution.js";
 import type {
   DyldCacheMapping,
@@ -10,6 +11,7 @@ import { ArtifactReaderFailure } from "./ArtifactReader.js";
 import { readMachoImage } from "./MachoLoadCommandReader.js";
 
 const MAGIC_PREFIX = "dyld_v1";
+const DEVELOPMENT_EXTENSION = ".development";
 /** Header fields are valid only below `mappingOffset`; real headers are under 1 KiB. */
 const MAX_HEADER_BYTES = 64 * 1024;
 const MAX_IMAGES = 200_000;
@@ -183,21 +185,6 @@ const readHeader = async (file: CacheFile): Promise<ParsedHeader> => {
   };
 };
 
-const PLATFORMS: Readonly<Record<number, string>> = {
-  1: "macos",
-  2: "ios",
-  3: "tvos",
-  4: "watchos",
-  5: "bridgeos",
-  6: "maccatalyst",
-  7: "ios-simulator",
-  8: "tvos-simulator",
-  9: "watchos-simulator",
-  10: "driverkit",
-  11: "visionos",
-  12: "visionos-simulator",
-};
-
 const version = (value: number): string | null =>
   value === 0
     ? null
@@ -236,14 +223,21 @@ export class DyldSharedCache {
     const files = [main];
     try {
       const parsed = await readHeader(main);
-      const subcaches = await DyldSharedCache.#subcacheEntries(main, parsed);
+      const { named, entries: subcaches } =
+        await DyldSharedCache.#subcacheEntries(main, parsed);
+      // With named suffixes, dyld strips a development main file's extension
+      // first: dyld_shared_cache_arm64e.development -> dyld_shared_cache_arm64e.01.development.
+      const base =
+        named && path.endsWith(DEVELOPMENT_EXTENSION)
+          ? path.slice(0, -DEVELOPMENT_EXTENSION.length)
+          : path;
       const statuses: DyldCacheSubcache[] = [];
       const parsedFiles = [{ file: main, parsed }];
       for (const entry of subcaches) {
         signal?.throwIfAborted();
         let file: CacheFile;
         try {
-          file = await CacheFile.open(`${path}${entry.suffix}`, entry.suffix);
+          file = await CacheFile.open(`${base}${entry.suffix}`, entry.suffix);
         } catch (cause: unknown) {
           if (
             cause instanceof Error &&
@@ -285,27 +279,30 @@ export class DyldSharedCache {
   static async #subcacheEntries(
     main: CacheFile,
     parsed: ParsedHeader,
-  ): Promise<
-    {
+  ): Promise<{
+    /** Entries carry explicit file suffixes (dyld_subcache_entry v2). */
+    readonly named: boolean;
+    readonly entries: {
       readonly suffix: string;
       readonly uuid: string;
       readonly vm_offset: string;
-    }[]
-  > {
-    if (!has(parsed, FIELD.subCacheArrayCount, 4)) return [];
+    }[];
+  }> {
+    if (!has(parsed, FIELD.subCacheArrayCount, 4))
+      return { named: false, entries: [] };
     const offset = parsed.header.readUInt32LE(FIELD.subCacheArrayOffset);
     const count = parsed.header.readUInt32LE(FIELD.subCacheArrayCount);
-    if (count === 0) return [];
+    // Headers that include cacheSubType use entries with an explicit file suffix.
+    const named = has(parsed, FIELD.cacheSubType, 4);
+    if (count === 0) return { named, entries: [] };
     if (count > MAX_SUBCACHES)
       throw new ArtifactReaderFailure(
         "format",
         "dyld cache lists too many subcaches",
       );
-    // Headers that include cacheSubType use entries with an explicit file suffix.
-    const named = has(parsed, FIELD.cacheSubType, 4);
     const size = named ? 56 : 24;
     const table = await main.read(offset, count * size);
-    return Array.from({ length: count }, (_, index) => {
+    const entries = Array.from({ length: count }, (_, index) => {
       const base = index * size;
       const suffix = named
         ? table.toString("latin1", base + 24, base + 56).replace(/\0.*$/su, "")
@@ -321,6 +318,7 @@ export class DyldSharedCache {
         vm_offset: hex(table.readBigUInt64LE(base + 16)),
       };
     });
+    return { named, entries };
   }
 
   static #summary(
@@ -359,15 +357,12 @@ export class DyldSharedCache {
       magic: parsed.magic,
       architecture: parsed.magic.slice(MAGIC_PREFIX.length).trim(),
       uuid: parsed.uuid,
-      platform:
-        platform === null
-          ? null
-          : { id: platform, name: PLATFORMS[platform] ?? null },
+      platform: platform === null ? null : applePlatform(platform),
       os_version: version(u32(FIELD.osVersion) ?? 0),
       alt_platform:
         altPlatform === null || altPlatform === 0
           ? null
-          : { id: altPlatform, name: PLATFORMS[altPlatform] ?? null },
+          : applePlatform(altPlatform),
       alt_os_version: version(u32(FIELD.altOsVersion) ?? 0),
       cache_type:
         cacheType === 0
@@ -430,6 +425,23 @@ export class DyldSharedCache {
     return this.#byPath.get(path);
   }
 
+  /**
+   * Whether an install path is listed and its bytes lie in a mapping of the
+   * main file or a subcache whose UUID matched.
+   */
+  locate(path: string): "mapped" | "unverified" | "absent" {
+    const image = this.find(path);
+    if (image === undefined) return "absent";
+    return this.#region(image.address) === undefined ? "unverified" : "mapped";
+  }
+
+  #region(address: number) {
+    return this.regions.find(
+      (region) =>
+        address >= region.address && address < region.address + region.size,
+    );
+  }
+
   /** Parse one cached image's load commands through the cache's VM mappings. */
   async imageFacts(
     path: string,
@@ -438,10 +450,7 @@ export class DyldSharedCache {
   > {
     const image = this.find(path);
     if (image === undefined) return undefined;
-    const region = this.regions.find(
-      ({ address, size }) =>
-        image.address >= address && image.address < address + size,
-    );
+    const region = this.#region(image.address);
     if (region === undefined) return undefined;
     const base = region.fileOffset + (image.address - region.address);
     const available = region.size - (image.address - region.address);

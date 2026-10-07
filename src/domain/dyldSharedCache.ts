@@ -1,5 +1,6 @@
 import { z } from "zod";
 
+import { applePlatformSchema } from "./applePlatforms.js";
 import { digestSchema } from "./digests.js";
 import { machoSliceSchema } from "./dylibResolution.js";
 
@@ -7,10 +8,6 @@ const hexSchema = z.string().regex(/^0x[0-9a-f]+$/u);
 const uuidSchema = z
   .string()
   .regex(/^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$/u);
-const platformSchema = z.object({
-  id: z.number().int(),
-  name: z.string().nullable(),
-});
 
 /** One cached image selected by its exact install path. */
 export const inspectDyldSharedCacheInputSchema = z.strictObject({
@@ -39,9 +36,9 @@ const headerSchema = z.object({
   magic: z.string(),
   architecture: z.string(),
   uuid: z.string(),
-  platform: platformSchema.nullable(),
+  platform: applePlatformSchema.nullable(),
   os_version: z.string().nullable(),
-  alt_platform: platformSchema.nullable(),
+  alt_platform: applePlatformSchema.nullable(),
   alt_os_version: z.string().nullable(),
   cache_type: z.enum(["development", "production", "multi-cache"]).nullable(),
   shared_region: z.object({ start: hexSchema, size: hexSchema }).nullable(),

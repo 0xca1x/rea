@@ -1,3 +1,4 @@
+import { applePlatform } from "../domain/applePlatforms.js";
 import type {
   MachoDependency,
   MachoImageFacts,
@@ -34,6 +35,14 @@ const LC_LOAD_UPWARD_DYLIB = 0x80000023;
 const LC_RPATH = 0x8000001c;
 const LC_DYLD_ENVIRONMENT = 0x27;
 const LC_CODE_SIGNATURE = 0x1d;
+const LC_BUILD_VERSION = 0x32;
+/** LC_VERSION_MIN_* commands imply their platform. */
+const VERSION_MIN_PLATFORMS: ReadonlyMap<number, number> = new Map([
+  [0x24, 1],
+  [0x25, 2],
+  [0x2f, 3],
+  [0x30, 4],
+]);
 
 /** `mach-o/loader.h` `dylib_use_command`: `nameoff == 28` and this marker. */
 const DYLIB_USE_MARKER = 0x1a741800;
@@ -238,6 +247,7 @@ const decodeCommands = (
     rpaths: [],
     dyld_environment: [],
     code_signature_present: false,
+    platforms: [],
   };
   let offset = 0;
   for (let index = 0; index < header.commandCount; index++) {
@@ -280,6 +290,18 @@ const decodeCommand = (
   }
   if (command === LC_CODE_SIGNATURE) {
     slice.code_signature_present = true;
+    return;
+  }
+  const implied = VERSION_MIN_PLATFORMS.get(command);
+  if (command === LC_BUILD_VERSION || implied !== undefined) {
+    if (body.byteLength < 12)
+      throw new MachoFormatIssue(
+        "malformed",
+        `load command ${index} is too short for a platform version`,
+      );
+    const id = implied ?? viewOf(body).getUint32(8, true);
+    if (!slice.platforms.some((platform) => platform.id === id))
+      slice.platforms.push(applePlatform(id));
     return;
   }
   const name = DEPENDENCY_COMMANDS.get(command);

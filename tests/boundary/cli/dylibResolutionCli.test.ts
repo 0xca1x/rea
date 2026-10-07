@@ -6,6 +6,7 @@ import { describe, expect } from "vitest";
 import {
   FILE_TYPE,
   LC,
+  buildVersionCommand,
   dylibCommand,
   machoImage,
   rpathCommand,
@@ -202,14 +203,22 @@ describe("trace-dylib-resolution CLI inputs", () => {
       await writeFiles(directory, {
         tool: machoImage({
           commands: [
+            buildVersionCommand(1),
             dylibCommand(LC.LOAD_DYLIB, "/usr/lib/libSystem.B.dylib"),
             dylibCommand(LC.LOAD_DYLIB, "/usr/lib/libnotcached.dylib"),
+            dylibCommand(LC.LOAD_DYLIB, "/usr/lib/swift/libswiftCore.dylib"),
           ],
         }),
+        // The .01 subcache holding libswiftCore is not written.
         dyld_shared_cache_arm64e: dyldCacheFixture([
           {
             path: "/usr/lib/libSystem.B.dylib",
             bytes: machoImage({ fileType: FILE_TYPE.dylib }),
+          },
+          {
+            path: "/usr/lib/swift/libswiftCore.dylib",
+            bytes: machoImage({ fileType: FILE_TYPE.dylib }),
+            inSubcache: true,
           },
         ]).main,
       });
@@ -234,7 +243,12 @@ describe("trace-dylib-resolution CLI inputs", () => {
       expect(trace.edges.map(({ resolution }) => resolution.status)).toEqual([
         "shared-cache",
         "undetermined",
+        "undetermined",
       ]);
+      expect(trace.coverage).toMatchObject({
+        status: "partial",
+        unverified_shared_cache_images: ["/usr/lib/swift/libswiftCore.dylib"],
+      });
     },
   );
 });
