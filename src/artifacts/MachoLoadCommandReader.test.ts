@@ -186,13 +186,16 @@ describe("Mach-O load command reader inputs", () => {
       { id: 2, name: "ios" },
       { id: 99, name: null },
     ]);
-    const short = new Uint8Array(8);
-    new DataView(short.buffer).setUint32(0, LC.BUILD_VERSION, true);
-    new DataView(short.buffer).setUint32(4, 8, true);
-    expect(await read(machoImage({ commands: [short] }))).toEqual({
-      status: "malformed",
-      reason: "load command 0 is too short for a platform version",
-    });
+    // A 16-byte LC_BUILD_VERSION, and one that declares a tool it lacks.
+    const truncated = buildVersionCommand(1).slice(0, 16);
+    new DataView(truncated.buffer).setUint32(4, 16, true);
+    const missingTool = buildVersionCommand(1);
+    new DataView(missingTool.buffer).setUint32(20, 1, true);
+    for (const command of [truncated, missingTool])
+      expect(await read(machoImage({ commands: [command] }))).toEqual({
+        status: "malformed",
+        reason: "load command 0 is too short for a platform version",
+      });
   });
 
   it("names 32-bit and non-Mach-O inputs without guessing", async () => {
@@ -240,9 +243,10 @@ describe("Mach-O load command reader failures", () => {
   });
 
   it("requires 8-byte command alignment in 64-bit images", async () => {
+    // A command the reader does not decode; only its size is checked.
     const command = new Uint8Array(12);
     const view = new DataView(command.buffer);
-    view.setUint32(0, LC.CODE_SIGNATURE, true);
+    view.setUint32(0, 0x7f000001, true);
     view.setUint32(4, 12, true);
     expect(await read(machoImage({ commands: [command] }))).toMatchObject({
       status: "malformed",
@@ -285,6 +289,11 @@ describe("Mach-O load command reader failures", () => {
     expect(await read(machoImage({ commands: [short] }))).toMatchObject({
       status: "malformed",
       reason: "load command 0 is too short to hold a string offset",
+    });
+    view.setUint32(0, LC.CODE_SIGNATURE, true);
+    expect(await read(machoImage({ commands: [short] }))).toMatchObject({
+      status: "malformed",
+      reason: "load command 0 is too short for LC_CODE_SIGNATURE",
     });
   });
 

@@ -109,10 +109,12 @@ export const compatibleSlice = (
   return undefined;
 };
 
-/** A cache serves processes of its CPU family: arm64e also serves arm64. */
+/**
+ * Whether a cache serves a process architecture. Compatibility is directional:
+ * an arm64e cache also serves arm64 processes and an x86_64h cache also serves
+ * x86_64 ones, but a generic cache lacks the arm64e or x86_64h ABI.
+ */
 export const cacheServes = (cache: string, process: string): boolean =>
   cache === process ||
-  (cache.startsWith("arm64") &&
-    process.startsWith("arm64") &&
-    process !== "arm64_32") ||
-  (cache.startsWith("x86_64") && process.startsWith("x86_64"));
+  (cache === "arm64e" && process === "arm64") ||
+  (cache === "x86_64h" && process === "x86_64");

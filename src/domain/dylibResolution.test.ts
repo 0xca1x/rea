@@ -647,6 +647,17 @@ describe("shared cache applicability", () => {
         "The supplied shared cache was not used for Contents/MacOS/Old (arm64): the process records no LC_BUILD_VERSION or LC_VERSION_MIN platform. Its absolute paths stay outside-target.",
       ]),
     );
+    const generic = await traceDylibLoading(
+      memoryView({
+        [MAIN]: executable({
+          architecture: "arm64e",
+          dependencies: [dependency("/usr/lib/libSystem.B.dylib")],
+        }),
+      }),
+      { roots: [MAIN], sharedCache: cache({ architecture: "arm64" }) },
+    );
+    // A generic arm64 cache lacks the arm64e ABI.
+    expect(generic.edges[0]?.candidates[0]?.outcome).toBe("outside-target");
     const unknownPlatform = await traceDylibLoading(
       memoryView({
         [MAIN]: executable({
@@ -725,5 +736,50 @@ describe("lazily loaded dependencies", () => {
     expect(trace.findings.map(({ kind }) => kind)).toEqual([
       "lazy-load-unresolved",
     ]);
+  });
+});
+
+describe("conditional loads", () => {
+  it("carries a conditional fallback's uncertainty to its dependents and reuses", async () => {
+    const VENDOR = "Contents/Frameworks/libvendor.dylib";
+    const OTHER = "Contents/Frameworks/libother.dylib";
+    const trace = await traceDylibLoading(
+      memoryView({
+        [MAIN]: executable({
+          rpaths: ["/opt/vendor/lib", "@executable_path/../Frameworks"],
+          dependencies: [
+            dependency("@rpath/libvendor.dylib"),
+            dependency("@executable_path/../Frameworks/libother.dylib"),
+          ],
+        }),
+        [VENDOR]: parsed(
+          slice({
+            install_name: "@rpath/libvendor.dylib",
+            dependencies: [dependency("@loader_path/libgone.dylib")],
+          }),
+        ),
+        [OTHER]: parsed(
+          slice({ dependencies: [dependency("@rpath/libvendor.dylib")] }),
+        ),
+      }),
+      { roots: [MAIN] },
+    );
+    expect(edgeFor(trace, MAIN, "@rpath/libvendor.dylib")).toMatchObject({
+      resolution: { status: "conditional", image: VENDOR },
+      loader_conditional: false,
+    });
+    expect(edgeFor(trace, VENDOR, "@loader_path/libgone.dylib")).toMatchObject({
+      resolution: { status: "unresolved" },
+      loader_conditional: true,
+    });
+    expect(edgeFor(trace, OTHER, "@rpath/libvendor.dylib")).toMatchObject({
+      candidates: [{ source: "already-loaded" }],
+      resolution: { status: "conditional", image: VENDOR },
+      loader_conditional: false,
+    });
+    expect(
+      trace.findings.find(({ kind }) => kind === "required-load-unresolved")
+        ?.explanation,
+    ).toContain(`${VENDOR} loads only conditionally`);
   });
 });

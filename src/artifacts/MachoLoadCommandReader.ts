@@ -289,12 +289,26 @@ const decodeCommand = (
     return;
   }
   if (command === LC_CODE_SIGNATURE) {
+    // linkedit_data_command: cmd, cmdsize, dataoff, datasize.
+    if (body.byteLength < 16)
+      throw new MachoFormatIssue(
+        "malformed",
+        `load command ${index} is too short for LC_CODE_SIGNATURE`,
+      );
     slice.code_signature_present = true;
     return;
   }
   const implied = VERSION_MIN_PLATFORMS.get(command);
   if (command === LC_BUILD_VERSION || implied !== undefined) {
-    if (body.byteLength < 12)
+    // version_min_command is 16 bytes; build_version_command is 24 bytes
+    // followed by ntools 8-byte build_tool_version records.
+    const required =
+      implied !== undefined
+        ? 16
+        : body.byteLength < 24
+          ? 24
+          : 24 + viewOf(body).getUint32(20, true) * 8;
+    if (body.byteLength < required)
       throw new MachoFormatIssue(
         "malformed",
         `load command ${index} is too short for a platform version`,

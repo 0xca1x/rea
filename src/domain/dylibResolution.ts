@@ -48,6 +48,8 @@ interface LoadedImage {
   readonly slice: MachoSlice;
   /** Images from the process root to this image; the rpath stack, outermost first. */
   readonly chain: readonly string[];
+  /** Some edge on the chain was conditional: an unknown earlier candidate may load instead. */
+  readonly conditional: boolean;
 }
 
 interface ProcessContext {
@@ -199,7 +201,8 @@ const resolveDependency = async (
   loader: string,
   context: ProcessContext,
 ): Promise<Edge> => {
-  const chain = context.loaded.get(loader)?.chain ?? [loader];
+  const current = context.loaded.get(loader);
+  const chain = current?.chain ?? [loader];
   const loaded = context.byInstallName.get(dependency.install_name);
   const candidates: Candidate[] = [];
   if (loaded !== undefined)
@@ -222,7 +225,14 @@ const resolveDependency = async (
       )
         break;
     }
-  const resolved = resolution(candidates);
+  const searched = resolution(candidates);
+  // Reusing an image that itself loads only conditionally is conditional too.
+  const resolved: Edge["resolution"] =
+    loaded !== undefined &&
+    context.loaded.get(loaded)?.conditional === true &&
+    searched.status === "resolved"
+      ? { ...searched, status: "conditional" }
+      : searched;
   const image =
     resolved.image === null ? undefined : context.images.get(resolved.image);
   const slice =
@@ -241,6 +251,7 @@ const resolveDependency = async (
       slice === undefined || slice.install_name === null
         ? null
         : slice.install_name === dependency.install_name,
+    loader_conditional: current?.conditional ?? false,
   };
 };
 
@@ -254,7 +265,11 @@ const traceProcess = async (
   signal?: AbortSignal,
 ): Promise<Edge[]> => {
   const edges: Edge[] = [];
-  context.loaded.set(context.root, { slice: rootSlice, chain: [context.root] });
+  context.loaded.set(context.root, {
+    slice: rootSlice,
+    chain: [context.root],
+    conditional: false,
+  });
   if (rootSlice.install_name !== null)
     context.byInstallName.set(rootSlice.install_name, context.root);
   const pending = [context.root];
@@ -277,7 +292,13 @@ const traceProcess = async (
           ? compatibleSlice(facts.slices, context.architecture)
           : undefined;
       if (slice === undefined) continue;
-      context.loaded.set(image, { slice, chain: [...current.chain, image] });
+      context.loaded.set(image, {
+        slice,
+        chain: [...current.chain, image],
+        // dyld may load an unknown earlier candidate instead of this fallback.
+        conditional:
+          current.conditional || edge.resolution.status === "conditional",
+      });
       if (
         slice.install_name !== null &&
         !context.byInstallName.has(slice.install_name)

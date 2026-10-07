@@ -96,9 +96,11 @@ The components also list:
 
 Symlinks are reported by path in `symlinks`. Their targets are not inventoried,
 so a versioned framework is described through its real `Versions/<version>/`
-directories rather than `Versions/Current`. When a framework has zero or several
-`Versions/*/Resources/Info.plist` files, its `info_plist_path` is `null` and a
-limitation explains why.
+directories rather than `Versions/Current`. A framework's `info_plist_path` is
+`null`, with a limitation explaining why, when it has more than one real
+`Versions/<version>/` directory (even if only one of them holds a plist,
+because `Versions/Current` decides which one applies) or when its single
+version directory has no `Resources/Info.plist`.
 
 AppleDouble sidecar files (`._*` and `__MACOSX/`) are inventory facts, but they
 describe neighbouring files. They are excluded from roots, bundle roles, and the
@@ -161,6 +163,11 @@ graded architectures, so an `x86_64h` process also loads `x86_64`. The edge's `r
 | `unresolved`   | Every candidate is definitively absent or unusable inside the root.                                                                                                                                                                    |
 | `undetermined` | No candidate resolves inside the root, and some candidate lies outside it or depends on the environment.                                                                                                                               |
 | `shared-cache` | An absolute install path, or an `@rpath` candidate outside the root, was found in the dyld shared cache passed as `shared_cache` (CLI `--shared-cache`). dyld loads the cached image, so later in-root candidates are unused.          |
+
+A `conditional` image is still traced, because it is the image the analyzed
+root supplies. Every edge below it has `loader_conditional: true`, and a
+request that reuses it by install name is `conditional` too. Findings on those
+edges say that they apply only if the conditional image loads.
 
 Absolute install names such as `/usr/lib/libSystem.B.dylib` are
 `outside-target`. On macOS 11 and later most of them live in the dyld shared

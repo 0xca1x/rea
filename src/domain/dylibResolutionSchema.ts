@@ -130,6 +130,11 @@ const edgeSchema = z.strictObject({
     image: z.string().nullable(),
   }),
   install_name_matches: z.boolean().nullable(),
+  /**
+   * The loader was reached through a conditional edge, so it might not load;
+   * this edge describes what happens only if it does.
+   */
+  loader_conditional: z.boolean(),
 });
 
 const findingSchema = z.strictObject({
