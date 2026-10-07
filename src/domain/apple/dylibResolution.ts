@@ -35,7 +35,6 @@ export {
   type DylibTreeView,
   type DylibSharedCacheView,
   type DylibResolutionResult,
-  type DylibCandidate,
   type DylibEdge,
   type DylibFinding,
   type DylibTrace,
