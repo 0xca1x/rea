@@ -45,6 +45,16 @@ const headerSchema = z.object({
   alt_platform: applePlatformSchema.nullable(),
   alt_os_version: z.string().nullable(),
   cache_type: z.enum(["development", "production", "multi-cache"]).nullable(),
+  cache_subtype: z
+    .object({
+      id: z.number().int().nonnegative(),
+      name: z.enum(["development", "production"]).nullable(),
+    })
+    .nullable()
+    .default(null)
+    .describe(
+      "Multi-cache subtype from the producer header: 0 is development, 1 is production; unknown values retain their ID with a null name. Null when absent or not applicable.",
+    ),
   shared_region: z.object({ start: hexSchema, size: hexSchema }).nullable(),
   max_slide: hexSchema.nullable(),
   mappings: z.array(mappingSchema),

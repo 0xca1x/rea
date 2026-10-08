@@ -228,7 +228,8 @@ rea inspect-dyld-shared-cache /System/Volumes/Preboot/Cryptexes/OS/System/Librar
 The result reports:
 
 - the magic, architecture, UUID, platform and OS version, any alternate platform
-  (Mac Catalyst), cache type, shared region and maximum slide;
+  (Mac Catalyst), cache type, the development/production subtype for multi-caches
+  (including its raw ID when unknown), shared region and maximum slide;
 - every VM mapping, with the file that holds it;
 - every subcache by file suffix, with its UUID checked against the main cache.
   A missing or mismatched subcache makes coverage `partial`, and images mapped

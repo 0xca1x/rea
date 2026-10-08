@@ -44,7 +44,10 @@ it("inspects a dyld shared cache through MCP without a target", async () => {
       }),
     },
   ]);
-  await writeFile(path, fixture.main);
+  const main = Buffer.from(fixture.main);
+  main.writeBigUInt64LE(2n, 0x68);
+  main.writeUInt32LE(1, 0x1c8);
+  await writeFile(path, main);
 
   const tools = await client.listTools();
   expect(tools.tools.map(({ name }) => name)).toContain(
@@ -62,6 +65,8 @@ it("inspects a dyld shared cache through MCP without a target", async () => {
   );
   expect(result).toMatchObject({
     architecture: "arm64e",
+    cache_type: "multi-cache",
+    cache_subtype: { id: 1, name: "production" },
     images_total: 1,
     inspected_images: [
       { path: "/usr/lib/libSystem.B.dylib", status: "parsed" },

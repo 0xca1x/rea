@@ -174,6 +174,40 @@ const IMAGES = [
   },
 ];
 
+it.each([
+  { type: 2, subtype: 0, expected: { id: 0, name: "development" } },
+  { type: 2, subtype: 1, expected: { id: 1, name: "production" } },
+  { type: 2, subtype: 9, expected: { id: 9, name: null } },
+  { type: 0, subtype: 1, expected: null },
+  { type: 1, subtype: 0, expected: null },
+])(
+  "preserves applicable multi-cache subtype $subtype for type $type",
+  async ({ type, subtype, expected }) => {
+    const fixture = dyldCacheFixture(IMAGES);
+    const main = Buffer.from(fixture.main);
+    main.writeBigUInt64LE(BigInt(type), 0x68);
+    main.writeUInt32LE(subtype, 0x1c8);
+    const path = await writeCache({ ...fixture, main });
+    const result = await inspectDyldSharedCache({ cache_path: path });
+    if (!result.ok) throw result.error;
+    const cache = dyldSharedCacheResultSchema.parse(result.value);
+    expect(cache.cache_type).toBe(
+      type === 2 ? "multi-cache" : type === 0 ? "development" : "production",
+    );
+    expect(cache.cache_subtype).toEqual(expected);
+  },
+);
+
+it("keeps a legacy multi-cache subtype unknown when its header lacks the field", async () => {
+  const fixture = dyldCacheFixture([], { legacy: true });
+  const main = Buffer.from(fixture.main);
+  main.writeBigUInt64LE(2n, 0x68);
+  const path = await writeCache({ ...fixture, main });
+  const result = await inspectDyldSharedCache({ cache_path: path });
+  if (!result.ok) throw result.error;
+  expect(result.value.cache_subtype).toBeNull();
+});
+
 describe("dyld shared cache inspection", () => {
   it("reads the header, subcaches, image list and cached load commands", async () => {
     const path = await writeCache(dyldCacheFixture(IMAGES));

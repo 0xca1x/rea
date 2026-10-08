@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { access, mkdtemp, realpath, rm } from "node:fs/promises";
+import { access, mkdtemp, open, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { promisify } from "node:util";
@@ -120,6 +120,33 @@ try {
   assert.equal(inspected.images_total, expected.size);
   assert.equal(inspected.coverage.status, "complete");
   assert.equal(inspected.inspected_images[0].status, "parsed");
+  // Check the producer header directly, independently of REA's header projection.
+  const handle = await open(cachePath, "r");
+  try {
+    const header = Buffer.alloc(0x1cc);
+    const { bytesRead } = await handle.read(header, 0, header.length, 0);
+    const multi = header.readBigUInt64LE(0x68) === 2n;
+    const hasSubtype =
+      bytesRead === header.length && header.readUInt32LE(0x10) >= header.length;
+    const subtype = multi && hasSubtype ? header.readUInt32LE(0x1c8) : null;
+    assert.deepEqual(
+      inspected.cache_subtype,
+      subtype === null
+        ? null
+        : {
+            id: subtype,
+            name:
+              subtype === 0
+                ? "development"
+                : subtype === 1
+                  ? "production"
+                  : null,
+          },
+      "multi-cache subtype differs from the producer header",
+    );
+  } finally {
+    await handle.close();
+  }
   await withArtifactMcp(null, async (client) => {
     const viaMcp = await artifactMcpResult(
       client,
@@ -181,6 +208,8 @@ try {
         architecture: inspected.architecture,
         os_version: inspected.os_version,
         images: inspected.images_total,
+        type: inspected.cache_type,
+        subtype: inspected.cache_subtype,
       },
       images_matching_dyld_info: compared,
       trace_shared_cache_edges: cached.length,

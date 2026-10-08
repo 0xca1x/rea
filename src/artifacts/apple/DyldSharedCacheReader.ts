@@ -571,6 +571,7 @@ export class DyldSharedCache {
     const cacheType = has(parsed, FIELD.cacheType, 8)
       ? Number(header.readBigUInt64LE(FIELD.cacheType))
       : null;
+    const cacheSubType = cacheType === 2 ? u32(FIELD.cacheSubType) : null;
     const symbols = has(parsed, FIELD.symbolFileUuid, 16)
       ? header.subarray(FIELD.symbolFileUuid, FIELD.symbolFileUuid + 16)
       : undefined;
@@ -606,6 +607,18 @@ export class DyldSharedCache {
         cacheType,
         has(parsed, FIELD.cacheSubType, 4),
       ),
+      cache_subtype:
+        cacheSubType !== null
+          ? {
+              id: cacheSubType,
+              name:
+                cacheSubType === 0
+                  ? "development"
+                  : cacheSubType === 1
+                    ? "production"
+                    : null,
+            }
+          : null,
       shared_region:
         u64(FIELD.sharedRegionStart) === null
           ? null
