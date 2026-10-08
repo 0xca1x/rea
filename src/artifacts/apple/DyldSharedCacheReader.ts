@@ -552,18 +552,31 @@ export class DyldSharedCache {
   ): Promise<string> {
     const hash = createHash("sha256");
     const buffer = Buffer.alloc(HASH_CHUNK_BYTES);
-    for (let position = 0; position < file.size;) {
+    let position = 0;
+    for (;;) {
       signal?.throwIfAborted();
+      if (position >= file.size) break;
       const { bytesRead } = await file.handle.read(
         buffer,
         0,
         Math.min(buffer.length, file.size - position),
         position,
       );
-      if (bytesRead === 0) break;
+      // A file truncated after open must not yield the surviving prefix's
+      // digest as the identity of the recorded size.
+      if (bytesRead === 0)
+        throw new ArtifactReaderFailure(
+          "integrity",
+          "dyld cache file changed while its digest was read",
+        );
       hash.update(buffer.subarray(0, bytesRead));
       position += bytesRead;
     }
+    if (position !== file.size)
+      throw new ArtifactReaderFailure(
+        "integrity",
+        "dyld cache file changed while its digest was read",
+      );
     return hash.digest("hex");
   }
 

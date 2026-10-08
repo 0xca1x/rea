@@ -268,7 +268,7 @@ const decodeCommands = (
         `load command ${index} at offset ${offset} has invalid cmdsize ${size}`,
       );
     const body = bytes.subarray(offset, offset + size);
-    decodeCommand(command, body, index, slice);
+    decodeCommand(command, body, index, slice, header.cpuType);
     offset += size;
   }
   // A header that declares fewer commands than its sizeofcmds could hide
@@ -286,6 +286,7 @@ const decodeCommand = (
   body: Uint8Array,
   index: number,
   slice: MachoSlice,
+  cpuType: number,
 ): void => {
   if (command === LC_ID_DYLIB) {
     slice.install_name = commandString(body, 24, index);
@@ -324,7 +325,20 @@ const decodeCommand = (
         "malformed",
         `load command ${index} is too short for a platform version`,
       );
-    const id = implied ?? viewOf(body).getUint32(8, true);
+    const declared = implied ?? viewOf(body).getUint32(8, true);
+    // Legacy LC_VERSION_MIN_* commands on Intel slices denote simulator
+    // platforms; Apple's decoder branches on the CPU type for these commands.
+    const intel = cpuType === 7 || cpuType === (7 | 0x01000000);
+    const id =
+      implied !== undefined && intel
+        ? declared === 2
+          ? 7
+          : declared === 3
+            ? 8
+            : declared === 4
+              ? 9
+              : declared
+        : declared;
     if (!slice.platforms.some((platform) => platform.id === id))
       slice.platforms.push(applePlatform(id));
     return;

@@ -186,6 +186,13 @@ describe("Mach-O load command reader inputs", () => {
       { id: 2, name: "ios" },
       { id: 99, name: null },
     ]);
+    // Legacy version-min commands on Intel slices denote simulators.
+    const intel = await read(
+      machoImage({ cpu: CPU.x86_64, commands: [versionMin] }),
+    );
+    expect(intel.status === "parsed" && intel.slices[0]?.platforms).toEqual([
+      { id: 7, name: "ios-simulator" },
+    ]);
     // A 16-byte LC_BUILD_VERSION, and one that declares a tool it lacks.
     const truncated = buildVersionCommand(1).slice(0, 16);
     new DataView(truncated.buffer).setUint32(4, 16, true);
