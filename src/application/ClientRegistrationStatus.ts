@@ -1,5 +1,6 @@
 import {
   effectiveClientServer,
+  grokServerListedDisabled,
   parseClientConfiguration,
 } from "./ClientConfigurationDocument.js";
 import { access, readFile } from "node:fs/promises";
@@ -80,7 +81,9 @@ export const readClientRegistrationStatuses = async (
           CLAUDE_CONFIG_DIR: options.environment.CLAUDE_CONFIG_DIR,
           CODEX_HOME: options.environment.CODEX_HOME,
           COPILOT_HOME: options.environment.COPILOT_HOME,
+          GROK_HOME: options.environment.GROK_HOME,
           OPENCODE_CONFIG: options.environment.OPENCODE_CONFIG,
+          SAND_DATA_ROOT: options.environment.SAND_DATA_ROOT,
           XDG_CONFIG_HOME: options.environment.XDG_CONFIG_HOME,
         },
   )) {
@@ -91,10 +94,8 @@ export const readClientRegistrationStatuses = async (
       continue;
     try {
       const content = await readFile(client.configPath, "utf8");
-      const raw = effectiveClientServer(
-        parseClientConfiguration(content, client.format),
-        PRODUCT_IDENTITY.mcpServerKey,
-      );
+      const parsed = parseClientConfiguration(content, client.format);
+      const raw = effectiveClientServer(parsed, PRODUCT_IDENTITY.mcpServerKey);
       if (raw === undefined) {
         statuses.push(
           unavailableStatus(client.name, client.configPath, "missing"),
@@ -116,7 +117,14 @@ export const readClientRegistrationStatuses = async (
             client,
             currentCommandPath,
             options.platform ?? process.platform,
-          )
+          ) &&
+            !(
+              client.format === "grok" &&
+              grokServerListedDisabled(
+                parsed.document,
+                PRODUCT_IDENTITY.mcpServerKey,
+              )
+            )
             ? "aligned"
             : "stale",
         ),
@@ -148,7 +156,7 @@ const registrationAligned = (
   if (!isOwnedClientRegistrationCommand(command, currentCommandPath))
     return false;
   if (
-    client.name === "codex" &&
+    (client.name === "codex" || client.name === "grok_build") &&
     registration.startup_timeout_sec !==
       MCP_STARTUP_POLICY.codexStartupTimeoutSeconds
   )
