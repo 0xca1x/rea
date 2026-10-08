@@ -38,7 +38,7 @@ export interface ArtifactEntry {
 
 /** Checksum evidence for a member representation the scanner cannot hash itself. */
 export interface ArtifactChecksumObservation {
-  readonly representation: "stored";
+  readonly representation: "stored" | "decoded";
   readonly algorithm: string;
   readonly declared: string;
   readonly observed: string;

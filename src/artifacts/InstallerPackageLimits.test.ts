@@ -62,6 +62,52 @@ it("shares an inflation budget across separate zlib members", async () => {
   );
 });
 
+it("charges raw member reads to the same cumulative work budget", async () => {
+  await withReader(
+    xarArchive([
+      { name: "a", data: Buffer.alloc(40, 65) },
+      { name: "b", data: Buffer.alloc(40, 66) },
+    ]),
+    async (reader) => {
+      let read = 0;
+      await expect(
+        (async () => {
+          for await (const entry of reader.entries()) {
+            await buffer(await reader.open(entry));
+            read++;
+          }
+        })(),
+      ).rejects.toMatchObject({
+        reason: "limit",
+        message: expect.stringContaining("Decoded archive budget"),
+      });
+      expect(read).toBe(1);
+    },
+    new ArtifactDecodedBudget(64),
+  );
+});
+
+it("validates unsafe extents even when a member is unsupported and would not be opened", async () => {
+  const bytes = rewriteXarToc(
+    xarArchive([{ name: "a", encoding: "bzip2", data: Buffer.from("opaque") }]),
+    (xml) =>
+      xml.replace(
+        /<offset>20<\/offset>/u,
+        `<offset>${Number.MAX_SAFE_INTEGER}</offset>`,
+      ),
+  );
+  await withReader(bytes, async (reader) => {
+    await expect(
+      (async () => {
+        for await (const entry of reader.entries()) void entry;
+      })(),
+    ).rejects.toMatchObject({
+      reason: "format",
+      message: expect.stringContaining("heap extent"),
+    });
+  });
+});
+
 it.each(["", " ", "1e2", "0x10"])(
   "rejects nondecimal/empty numeric TOC data: %j",
   async (value) => {

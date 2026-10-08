@@ -213,11 +213,18 @@ describe("installer package CRC recovery", () => {
         }),
       ).normalized_result,
     );
+    const bad = inventory.occurrences.find(
+      ({ logical_path: logical }) => logical === "Payload/bad",
+    );
+    expect(bad).toMatchObject({ hash_status: "mismatched" });
     expect(
-      inventory.occurrences.find(
-        ({ logical_path: logical }) => logical === "Payload/bad",
+      inventory.nodes.find(
+        ({ artifact_id }) => artifact_id === bad?.artifact_id,
       ),
-    ).toMatchObject({ hash_status: "unavailable" });
+    ).toMatchObject({ sha256: sha256("abc"), size: 3 });
+    expect(bad?.limitations).toContain(
+      "Declared decoded cpio-byte-sum 00000001 disagrees with observed 00000126.",
+    );
     expect(
       inventory.occurrences.find(
         ({ logical_path: logical }) => logical === "Payload/good",

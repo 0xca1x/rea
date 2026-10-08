@@ -63,9 +63,11 @@ export const extractArtifact = async (
     manifest: snapshot.manifest,
     occurrences,
     nodes,
-    unavailablePaths: snapshot.occurrences
-      .filter(({ hash_status }) => hash_status === "unavailable")
-      .map(({ logical_path }) => logical_path),
+    unavailablePaths: new Set(
+      snapshot.occurrences
+        .filter(({ hash_status }) => hash_status === "unavailable")
+        .map(({ logical_path }) => logical_path),
+    ),
   };
   const selected = selectedOccurrences.map((occurrence) => {
     if (
@@ -147,7 +149,7 @@ const materializeSelection = async ({
         if (selectedItem === undefined) {
           if (
             entry.contentUnavailable === true &&
-            inventory.unavailablePaths.includes(path)
+            inventory.unavailablePaths.has(path)
           )
             return false;
           if (entry.kind === "file" || entry.kind === "slice")
@@ -228,7 +230,7 @@ const createExtractionResult = (
     provenance: [],
     limitations: [
       "All available selected regular files were materialized; expanded PKG Payload/Scripts archives are represented by their extracted children.",
-      ...inventory.unavailablePaths.map(
+      ...[...inventory.unavailablePaths].map(
         (path) =>
           `Unavailable member ${path} was not extracted; see its inventory occurrence for the reason.`,
       ),
@@ -240,7 +242,7 @@ interface LoadedInventory {
   readonly manifest: ArtifactGraphManifest;
   readonly occurrences: ReadonlyMap<string, ArtifactOccurrence>;
   readonly nodes: ReadonlyMap<string, ArtifactNode>;
-  readonly unavailablePaths: readonly string[];
+  readonly unavailablePaths: ReadonlySet<string>;
 }
 
 const collectOccurrences = (

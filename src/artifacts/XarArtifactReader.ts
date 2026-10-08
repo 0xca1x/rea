@@ -6,7 +6,10 @@ import { createInflate, inflateSync } from "node:zlib";
 import { DOMParser, type Element, type Node } from "@xmldom/xmldom";
 
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
-import { ArtifactDecodedBudget } from "./ArtifactDecodedBudget.js";
+import {
+  ArtifactDecodedBudget,
+  ArtifactBudgetTransform,
+} from "./ArtifactDecodedBudget.js";
 import { artifactStreamPipeline } from "./ArtifactStreamPipeline.js";
 import {
   xarInteger as integer,
@@ -233,10 +236,7 @@ const collectMembers = (
       kind,
       ...(unsupportedType === undefined ? {} : { unsupportedType }),
       mode,
-      data:
-        kind === "file" && unsupportedType === undefined
-          ? parseData(next.element)
-          : undefined,
+      data: parseData(next.element),
       link: kind === "symlink" ? textOf(next.element, "link") : undefined,
     });
     pending.push(
@@ -508,6 +508,13 @@ export class XarArtifactReader implements ArtifactReader {
     await this.#verifyToc(tocElement, compressed, headerChecksumAlg);
     this.#members = collectMembers(tocElement, this.decodedBudget);
     for (const member of this.#members) {
+      if (member.data !== undefined)
+        xarHeapPosition(
+          this.#heap,
+          member.data.offset,
+          member.data.length,
+          this.#size,
+        );
       if (this.#byPath.has(member.path))
         throw new ArtifactReaderFailure(
           "path",
@@ -781,8 +788,10 @@ export class XarArtifactReader implements ArtifactReader {
                   this.#integrity.set(entry.adapterKey, [observation]);
                 },
           );
-    const stages: Transform[] =
-      archivedVerifier === undefined ? [] : [archivedVerifier];
+    const stages: Transform[] = [
+      new ArtifactBudgetTransform(this.decodedBudget, entry.path, signal),
+    ];
+    if (archivedVerifier !== undefined) stages.push(archivedVerifier);
     if (data.encoding === "application/x-gzip")
       stages.push(
         createInflate(),

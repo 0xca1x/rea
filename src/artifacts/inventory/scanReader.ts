@@ -232,8 +232,8 @@ const digestArtifactEntry = async (
           ]
         : []),
       ...storedMismatches.map(
-        ({ algorithm, declared, observed }) =>
-          `Declared stored ${algorithm} ${declared} disagrees with observed ${observed}.`,
+        ({ representation, algorithm, declared, observed }) =>
+          `Declared ${representation} ${algorithm} ${declared} disagrees with observed ${observed}.`,
       ),
     ],
   };

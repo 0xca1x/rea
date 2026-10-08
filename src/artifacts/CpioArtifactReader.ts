@@ -10,6 +10,7 @@ import type { ArtifactCommand } from "../domain/artifactGraph.js";
 import {
   ArtifactReaderFailure,
   type ArtifactEntry,
+  type ArtifactChecksumObservation,
   type ArtifactReader,
 } from "./ArtifactReader.js";
 
@@ -256,6 +257,14 @@ export class CpioArtifactReader implements ArtifactReader {
   readonly #links = new Map<string, Buffer>();
   readonly #pending = new Map<string, PendingLink[]>();
   readonly #aliases = new Map<string, Buffer>();
+  readonly #integrity = new Map<
+    string,
+    readonly ArtifactChecksumObservation[]
+  >();
+  readonly #linkIntegrity = new Map<
+    string,
+    readonly ArtifactChecksumObservation[]
+  >();
   #buffered = 0;
 
   constructor(
@@ -509,6 +518,9 @@ export class CpioArtifactReader implements ArtifactReader {
     bytes: Buffer,
   ): ArtifactEntry {
     this.#aliases.set(key, bytes);
+    const sourceIntegrity = this.#linkIntegrity.get(header.identity);
+    if (sourceIntegrity !== undefined)
+      this.#integrity.set(key, sourceIntegrity);
     return entryOf({
       path,
       kind: "file",
@@ -588,9 +600,15 @@ export class CpioArtifactReader implements ArtifactReader {
     );
   }
 
-  #remember(header: CpioHeader, bytes: Buffer): void {
+  #remember(
+    header: CpioHeader,
+    bytes: Buffer,
+    observations: readonly ArtifactChecksumObservation[] = [],
+  ): void {
     if (this.#links.has(header.identity)) return;
     this.#links.set(header.identity, bytes);
+    if (observations.length > 0)
+      this.#linkIntegrity.set(header.identity, observations);
     this.#buffered += bytes.length;
   }
 
@@ -599,6 +617,7 @@ export class CpioArtifactReader implements ArtifactReader {
     source: ByteSource,
     header: CpioHeader,
     path: string,
+    record?: (observation: ArtifactChecksumObservation) => void,
   ): AsyncGenerator<Buffer> {
     let sum = 0;
     this.#cancelled();
@@ -615,11 +634,20 @@ export class CpioArtifactReader implements ArtifactReader {
       source.take(padding(header.format, header.fileSize), "data padding"),
     );
     this.#cancelled();
-    if (header.format === "crc" && sum !== header.check)
-      throw new ArtifactReaderFailure(
-        "integrity",
-        `cpio CRC disagrees with content: ${path}`,
-      );
+    if (header.format === "crc" && sum !== header.check) {
+      if (record !== undefined)
+        record({
+          representation: "decoded",
+          algorithm: "cpio-byte-sum",
+          declared: header.check.toString(16).padStart(8, "0"),
+          observed: sum.toString(16).padStart(8, "0"),
+        });
+      else
+        throw new ArtifactReaderFailure(
+          "integrity",
+          `cpio CRC disagrees with content: ${path}`,
+        );
+    }
   }
 
   async #collect(
@@ -643,7 +671,10 @@ export class CpioArtifactReader implements ArtifactReader {
 
   open(entry: ArtifactEntry): Promise<Readable> {
     const alias = this.#aliases.get(entry.adapterKey);
-    if (alias !== undefined) return Promise.resolve(Readable.from([alias]));
+    if (alias !== undefined) {
+      this.decodedBudget.consume(alias.length, entry.path);
+      return Promise.resolve(Readable.from([alias]));
+    }
     const source = this.#source;
     const current = this.#current;
     if (
@@ -661,13 +692,24 @@ export class CpioArtifactReader implements ArtifactReader {
         ),
       );
     this.#consumed = true;
-    const chunks = this.#verified(source, current.header, current.path);
+    const chunks = this.#verified(
+      source,
+      current.header,
+      current.path,
+      this.integrity === "record-and-continue"
+        ? (observed) => this.#integrity.set(entry.adapterKey, [observed])
+        : undefined,
+    );
     if (!this.#shouldKeep(current.header))
       return Promise.resolve(Readable.from(chunks));
     // Keep a linked member's bytes for paths that share them.
     const kept: Buffer[] = [];
     const remember = (): void => {
-      this.#remember(current.header, Buffer.concat(kept));
+      this.#remember(
+        current.header,
+        Buffer.concat(kept),
+        this.#integrity.get(entry.adapterKey),
+      );
     };
     return Promise.resolve(
       Readable.from(
@@ -684,6 +726,13 @@ export class CpioArtifactReader implements ArtifactReader {
 
   provenance(): readonly ArtifactCommand[] {
     return [];
+  }
+
+  /** Completed member CRC evidence, including inherited hard-link source contradictions. */
+  integrityObservations(
+    entry: ArtifactEntry,
+  ): readonly ArtifactChecksumObservation[] {
+    return this.#integrity.get(entry.adapterKey) ?? [];
   }
 
   async close(): Promise<void> {
