@@ -8,7 +8,8 @@ export const notarizationTicketFixture = (): Uint8Array => {
   content.writeUInt32LE(1, 8);
   content[24] = 2;
   content.fill(0xab, 25);
-  const signature = Buffer.from([0x30, 6, 2, 1, 1, 2, 1, 1]);
+  const signature = Buffer.alloc(72);
+  signature.set([0x30, 6, 2, 1, 1, 2, 1, 1]);
   const header = Buffer.alloc(16);
   header.write("s8ch", 0, "ascii");
   header.writeUInt32LE(1, 4);

@@ -100,6 +100,7 @@ export const signatureVerification = (
   capture: NativeCommandCapture,
   path: string,
   unsigned: boolean,
+  progressCompleteness: "complete" | "ambiguous" = "complete",
 ): NonNullable<InspectSignature["verification"]> => {
   const lines = `${capture.stderr}\n${capture.stdout}`
     .split("\n")
@@ -109,11 +110,10 @@ export const signatureVerification = (
   );
   return {
     path,
-    status: verificationStatus(
-      capture,
-      codesignReasons(capture, path),
-      unsigned,
-    ),
+    status:
+      progressCompleteness === "ambiguous" && capture.exitCode !== 0
+        ? "unknown"
+        : verificationStatus(capture, codesignReasons(capture, path), unsigned),
     exit_code: capture.exitCode,
     diagnostics,
     prepared_nested_code: [

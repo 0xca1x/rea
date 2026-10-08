@@ -6,7 +6,7 @@ export type TicketReadAt = (
 
 /**
  * Inspect the local s8ch/g8tk ticket framing. Observed in stapled app tickets;
- * see bytewitch's NotarizedTicket decoder and apple-platform-rs ticket_lookup.
+ * see https://www.mothersruin.com/software/Archaeology/reverse/tickets.html.
  * This does not authenticate certificates, signatures, or notarized cdhashes.
  */
 export const ticketStructureIssue = async (
@@ -38,16 +38,18 @@ export const ticketStructureIssue = async (
   const certificates = await derSequenceExtent(read, 16, certificateSize);
   if (certificates !== certificateSize)
     return "Ticket certificate block has malformed DER framing";
+  const signatureFieldSize = 72;
+  if (size - signatureOffset !== signatureFieldSize)
+    return "Ticket signature field is truncated or does not contain exactly 72 bytes";
   const signatureSize = await derSequenceExtent(
     read,
     signatureOffset,
-    size - signatureOffset,
+    signatureFieldSize,
   );
   if (signatureSize === null || signatureSize < 8)
     return "Ticket signature has malformed DER framing";
-  // ECDSA encodings can be padded to 72 bytes; only zero padding is accepted.
+  // The fixed signature field contains DER followed by zero padding.
   const paddingSize = size - signatureOffset - signatureSize;
-  if (paddingSize > 2) return "Ticket has unrecognized trailing bytes";
   const padding = await read(signatureOffset + signatureSize, paddingSize);
   if (padding.byteLength !== paddingSize || padding.some((byte) => byte !== 0))
     return "Ticket has malformed signature padding";

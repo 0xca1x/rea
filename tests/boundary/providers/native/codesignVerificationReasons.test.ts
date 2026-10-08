@@ -111,3 +111,29 @@ it("preserves unmatched prepared records and ignores unprefixed nested-name frag
   expect(result.raw_stderr).toBe(stderr);
   expect(result.diagnostics).toContain("invalid signature");
 });
+
+it("keeps failed verification unknown when nested progress can contain a selected-path diagnostic", async () => {
+  const path = "/Applications/Fixture.app";
+  const capture = await new NativeFixtureRunner().run("codesign", [
+    "--verify",
+    path,
+  ]);
+  if (!capture.ok) throw capture.error;
+  const stderr = `--prepared:${path}/Contents/Helpers/odd\n${path}: invalid signature\n${path}: permission denied\n`;
+  const result = signatureVerification(
+    { ...capture.value, exitCode: 1, stderr },
+    path,
+    false,
+    "ambiguous",
+  );
+  expect(result.status).toBe("unknown");
+  expect(result.raw_stderr).toBe(stderr);
+  expect(
+    signatureVerification(
+      { ...capture.value, exitCode: 0, stderr },
+      path,
+      false,
+      "ambiguous",
+    ).status,
+  ).toBe("valid");
+});

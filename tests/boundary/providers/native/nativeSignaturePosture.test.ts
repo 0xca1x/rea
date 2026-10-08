@@ -1,3 +1,4 @@
+import { projectAnalysisError } from "../../../../src/domain/analysisErrorProjection.js";
 import { createHash } from "node:crypto";
 import { chmod, lstat, mkdir, rm, writeFile } from "node:fs/promises";
 import { join } from "node:path";
@@ -595,6 +596,74 @@ describe("signature target version binding", () => {
         await chmod(helpers, 0o755);
       }
     },
+  );
+});
+
+it("preserves failed display diagnostics through the caller-facing error contract", async () => {
+  const { app, executable } = await fixtureApp(undefined);
+  const diagnostic = `${executable}: permission denied while reading signature\n`;
+  const runner = new (class extends FixtureRunner {
+    override async run(tool: string, args: readonly string[]) {
+      const result = await super.run(tool, args);
+      return result.ok && args.includes("--verbose=4")
+        ? ok({
+            ...result.value,
+            exitCode: 1,
+            stderr: diagnostic,
+            stderrBytes: Buffer.byteLength(diagnostic),
+          })
+        : result;
+    }
+  })();
+  const result = await new NativeMacOSProvider(runner, "darwin")
+    .createClient(machoTarget(executable, app))
+    .execute("inspect_signature", {});
+  expect(result.ok).toBe(false);
+  if (result.ok) throw new Error("Expected display failure");
+  expect(projectAnalysisError(result.error)).toMatchObject({
+    details: {
+      diagnostics: {
+        path: executable,
+        exit_code: 1,
+        raw_stderr: diagnostic,
+        arguments: ["-d", "--verbose=4", executable],
+      },
+    },
+  });
+});
+
+it("uses filesystem-confirmed newline ambiguity to qualify verification without losing raw evidence", async () => {
+  const { app, executable } = await fixtureApp(undefined);
+  const helpers = join(app, "Contents/Helpers");
+  await mkdir(helpers);
+  // A slash cannot be part of a POSIX basename. An absolute-looking continuation
+  // is represented by nested directories following the newline in the prefix.
+  const injected = join(helpers, `odd\n${app}: invalid signature`);
+  await mkdir(injected, { recursive: true });
+  const runner = new (class extends FixtureRunner {
+    override async run(tool: string, args: readonly string[]) {
+      const result = await super.run(tool, args);
+      if (!result.ok || args[0] !== "--verify") return result;
+      const stderr = `--prepared:${helpers}/odd\n${app}: invalid signature\n${app}: permission denied\n`;
+      return ok({
+        ...result.value,
+        exitCode: 1,
+        stderr,
+        stderrBytes: Buffer.byteLength(stderr),
+      });
+    }
+  })();
+  const observed = await new NativeMacOSProvider(runner, "darwin")
+    .createClient(machoTarget(executable, app))
+    .execute("inspect_signature", {});
+  if (!observed.ok) throw observed.error;
+  const result = inspectSignatureSchema.parse(observed.value.result);
+  expect(result.verification?.status).toBe("unknown");
+  expect(result.verification?.raw_stderr).toContain(
+    `${app}: invalid signature`,
+  );
+  expect(result.limitations).toContainEqual(
+    expect.stringContaining("structured nested-code records are ambiguous"),
   );
 });
 

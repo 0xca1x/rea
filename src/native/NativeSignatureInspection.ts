@@ -37,7 +37,7 @@ import {
   signedCodePath,
   stapledTicket,
 } from "./NativeSignaturePosture.js";
-import { unconfirmedNestedCode } from "./NativeNestedCode.js";
+import { inspectNestedCodePaths } from "./NativeNestedCode.js";
 
 interface SignatureDisplays {
   readonly display: NativeCommandCapture;
@@ -71,6 +71,15 @@ const signatureDisplays = async (
           NATIVE_MACOS_PROVIDER_IDENTITY.id,
           "inspect_signature",
           {
+            diagnostics: {
+              path,
+              tool: result.tool,
+              arguments: [...result.arguments],
+              exit_code: result.exitCode,
+              signal: result.signal,
+              raw_stdout: result.stdout,
+              raw_stderr: result.stderr,
+            },
             cause: new NativeCommandFailure(
               "codesign",
               "nonzero-exit",
@@ -127,10 +136,10 @@ export const inspectNativeSignature = async (options: {
     captures.push(anchor.value);
     appleOrigin = anchor.value.exitCode === 0;
     if (!appleOrigin) {
-      const reason = codesignReasons(anchor.value, code).find(
-        (line) => line.trim().length > 0,
-      );
-      appleOriginFailure = reason ?? `codesign exited ${anchor.value.exitCode}`;
+      const reason = codesignReasons(anchor.value, code)
+        .filter((line) => line.trim().length > 0)
+        .join("\n");
+      appleOriginFailure = reason || `codesign exited ${anchor.value.exitCode}`;
     }
   }
   const slices = await inspectSignatureSlices(
@@ -145,16 +154,28 @@ export const inspectNativeSignature = async (options: {
     slices.value.signed === undefined ? unsigned : !slices.value.signed;
   // Verification is independent evidence: uncertain display probes must not
   // erase an explicit signature failure from the verifier.
-  const verification = signatureVerification(
+  const reportedVerification = signatureVerification(
     verified.value,
     code,
     aggregateUnsigned,
   );
+  const nestedPaths = await inspectNestedCodePaths(
+    reportedVerification,
+    signal,
+  );
+  const verification = nestedPaths.progressAmbiguous
+    ? signatureVerification(
+        verified.value,
+        code,
+        aggregateUnsigned,
+        "ambiguous",
+      )
+    : reportedVerification;
   const limitations = [
     ...parsed.limitations,
     ...SIGNATURE_POSTURE_LIMITATIONS,
     ...slices.value.limitations,
-    ...(await unconfirmedNestedCode(verification, signal)),
+    ...nestedPaths.limitations,
   ];
   if (entitlementValue.omittedPrototypeKeys !== 0)
     limitations.push(
