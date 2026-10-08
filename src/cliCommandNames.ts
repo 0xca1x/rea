@@ -40,6 +40,7 @@ export const CLI_COMMANDS = Object.freeze({
   resolveNativeCallTargets: "resolve-native-call-targets",
   inspectAssetCatalog: "inspect-asset-catalog",
   inspectManagedArtifact: "inspect-managed-artifact",
+  inspectRecordedCrash: "inspect-recorded-crash",
   inspectBinaryLayout: "inspect-binary-layout",
   inspectFirmwareRegions: "inspect-firmware-regions",
   extractFirmware: "extract-firmware",
