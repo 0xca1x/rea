@@ -2,9 +2,9 @@
 name: reverse-engineer-anything
 description: Reverse engineer native, managed, Electron/JavaScript, packaged, firmware, and browser targets with REA. Use shipped-artifact or requested runtime evidence to explain features, compare versions, decompile code, or guide a reconstruction. Skip REA for ordinary source-repository architecture analysis.
 metadata:
-  version: "32"
-  tool_count: 138
-  catalog_digest: "876d360007323512c42a25736a1ce0524246a9b87aad27564c2b275bc1c34133"
+  version: "33"
+  tool_count: 139
+  catalog_digest: "65ffda040e33bc97166231d7b9c4a43a9732fca8a474ee39cae7b69aee4485b4"
 ---
 
 # REA
@@ -109,6 +109,11 @@ explicit path or endpoint and do not need it.
   caller-supplied pwntools without opening a disassembler database. Preserve its
   raw locations and inference/coverage limits; see the
   [offline binary guide](https://github.com/morluto/rea/blob/main/docs/binary-diagnostics.md).
+- Supplied Linux x86-64 ELF core: `inspect_recorded_crash`. Read every recorded
+  thread, raw note and source-bound register without opening a live target.
+  Historical PIDs do not select live processes. Request `include_debugger_context`
+  only when core-only mapping candidates help; see the
+  [recorded crash guide](https://github.com/morluto/rea/blob/main/docs/recorded-crashes.md).
 - Native executable, library, or analysis database: `open_binary`, then
   use focused analysis tools directly; call `binary_overview` when metadata or
   inventory context is useful and available from the selected provider.
