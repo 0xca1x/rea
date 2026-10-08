@@ -111,7 +111,16 @@ extension, a login item, a privileged helper, launchd plists, and a helper tool,
 signed ad hoc. It packs the app as a directory, a `ditto` ZIP, and an APFS DMG,
 then checks that `inspect-artifact` plus `project-apple-application-graph`
 report the same bundle anatomy for all three through the CLI, with stdio MCP
-parity. It also checks that the DMG is detached afterwards. It runs in macOS CI.
+parity. It also checks that the DMG is detached afterwards. The same app
+covers `trace-dylib-resolution`:
+
+- each resolution status and finding, with CLI/MCP parity;
+- for every traced image, dependencies, rpaths, and install names equal to
+  `otool -l`;
+- for the main executable and an XPC service, a predicted load order equal to
+  the images dyld actually loads under `DYLD_PRINT_LIBRARIES`.
+
+It runs in macOS CI.
 
 Apple artifact verifiers live in `scripts/verify/apple/`, with the macOS bundle
 builder under `scripts/fixtures/apple/` and NIB byte fixtures beside the decoder
@@ -640,6 +649,16 @@ the ordinary lane. Its large MCP transfer is opt-in with
 `REA_VERIFY_LARGE_ELF_MCP=1` (or the workflow dispatch `large_mcp` input), an
 explicit 256 MiB SDK receive buffer and five-minute request timeout. Ordinary
 MCP fixtures retain the pinned SDK defaults.
+
+### Offline EVM interface
+
+`npm run verify:evm:interface` requires Linux x64, an absolute
+`REA_VERIFY_STRACE_COMMAND`, caller-supplied util-linux `prlimit` and `REA_VERIFY_SOLC_MODULE` selecting the absolute module path for
+solc 0.8.30. It compiles source-owned plain/optimized/via-IR Cancun fixtures in
+private storage and checks actual CLI/MCP selector evidence, raw/hex identity,
+unknowns, malformed carriers and independent cleanup. An optional positional
+entrypoint verifies a fresh installed package. It acquires no engine, compiler
+or chain dependency and does not execute a contract on a chain.
 
 ## Agent evaluation and conformance records
 

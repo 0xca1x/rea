@@ -12,34 +12,13 @@ input file and include the observed lipo slice offset for universal binaries.
 If that offset is unavailable, segment evidence locations are omitted with an
 explicit limitation; architecture inventory locations remain available.
 
-- `inspect_signature` / `rea inspect-signature <app-or-mach-o>` reports
-  codesign identity, requirements and entitlements, and adds:
-  - **Observed facts:**
-    - the parsed CodeDirectory, with flags decoded from their numeric value
-      (`runtime`, `library-validation`, `restrict`, `kill`, `adhoc`,
-      `linker-signed`, …), slot counts, platform identifier and runtime
-      version;
-    - sealed resources;
-    - a local `codesign --verify --deep --strict` result, with diagnostics and the
-      nested code it validated;
-    - whether a notarization ticket is stapled at `Contents/CodeResources`.
-      The ticket itself and Apple's notarization record are not checked,
-      because that needs the network.
-  - **Derived `security_facets`**, each with the flags or entitlements that
-    support it:
-    - library validation;
-    - whether dyld honors `DYLD_*` variables;
-    - debugger attach;
-    - executable-memory policy;
-    - App Sandbox.
-
-    A CodeDirectory platform identifier counts as a platform binary only
-    when the signature also satisfies `anchor apple` (Apple's own code;
-    `codesign --verify -R="anchor apple"`). Otherwise the facets that depend
-    on it are `unknown`. A universal file whose slices differ in signing
-    state reports every facet as `unknown`, because no one CodeDirectory
-    describes the process. System Integrity Protection, AMFI and setuid
-    policy are not evaluated.
+- `trace_dylib_resolution` / `rea trace-dylib-resolution <app-or-mach-o>`
+  parses Mach-O load commands in TypeScript and follows dyld's path expansion
+  for every executable in an app bundle, or for one Mach-O within its directory.
+  It reports each `@rpath`, `@loader_path` and `@executable_path` candidate with
+  its outcome. Paths outside the analyzed root, including shared-cache system
+  libraries, stay undetermined. See
+  [Apple application analysis](apple-application-analysis.md#dylib-load-resolution).
 - `inspect_asset_catalog` / `rea inspect-asset-catalog <app>` reads compiled
   `Assets.car` metadata through macOS `assetutil --info`. Catalog digests, raw
   rendition fields, pagination and exact UI resource-name matches are returned.
