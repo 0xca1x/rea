@@ -69,7 +69,7 @@ export const deriveFindings = (
         edge_index: null,
         image,
         basis: "derived",
-        explanation: `${image} (${architecture}) sets dyld environment variables through LC_DYLD_ENVIRONMENT (${environment.join(", ")}); search paths they add are not modeled.`,
+        explanation: `${image} (${architecture}) sets dyld environment variables through LC_DYLD_ENVIRONMENT (${environment.join(", ")}); any image-selection overrides they request are not modeled. Diagnostic settings alone do not alter resolution.`,
       });
   }
   return findings;

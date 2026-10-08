@@ -926,3 +926,34 @@ it("propagates embedded search-path uncertainty through found, missing, lazy and
     "dyld-environment-present",
   ]);
 });
+
+it.each([
+  "DYLD_PRINT_LIBRARIES=1",
+  "DYLD_PRINT_RPATHS=1",
+  "DYLD_LIBRARY_PATH_LOG=/tmp",
+  "DYLD_LIBRARY_PATH",
+])(
+  "retains %s as an observation without adding path uncertainty",
+  async (setting) => {
+    const child = "Contents/MacOS/child.dylib";
+    const trace = await traceDylibLoading(
+      memoryView({
+        [MAIN]: executable({
+          dyld_environment: [setting],
+          dependencies: [dependency("@executable_path/child.dylib")],
+        }),
+        [child]: parsed(slice()),
+      }),
+      { roots: [MAIN] },
+    );
+    expect(trace.edges[0]?.resolution.status).toBe("resolved");
+    expect(trace.coverage.status).toBe("complete");
+    expect(
+      trace.images.find(({ path }) => path === MAIN)?.slices[0]
+        ?.dyld_environment,
+    ).toEqual([setting]);
+    expect(trace.findings.map(({ kind }) => kind)).toContain(
+      "dyld-environment-present",
+    );
+  },
+);

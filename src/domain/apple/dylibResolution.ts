@@ -44,6 +44,29 @@ export {
 type Candidate = DylibCandidate;
 type Edge = DylibEdge;
 
+// Apple's PathOverrides consumes these variable names. Print/logging variables
+// remain observations and do not change which library a search selects.
+const DYLD_PATH_VARIABLES: ReadonlySet<string> = new Set([
+  "DYLD_LIBRARY_PATH",
+  "DYLD_FRAMEWORK_PATH",
+  "DYLD_FALLBACK_LIBRARY_PATH",
+  "DYLD_FALLBACK_FRAMEWORK_PATH",
+  "DYLD_VERSIONED_LIBRARY_PATH",
+  "DYLD_VERSIONED_FRAMEWORK_PATH",
+  "DYLD_INSERT_LIBRARIES",
+  "DYLD_IMAGE_SUFFIX",
+  "DYLD_ROOT_PATH",
+  "DYLD_OVERLAY_PATH",
+]);
+
+const hasDyldPathOverrides = (slice: MachoSlice): boolean =>
+  slice.dyld_environment.some((setting) => {
+    const delimiter = setting.indexOf("=");
+    return (
+      delimiter > 0 && DYLD_PATH_VARIABLES.has(setting.slice(0, delimiter))
+    );
+  });
+
 interface LoadedImage {
   readonly slice: MachoSlice;
   /** Images from the process root to this image; the rpath stack, outermost first. */
@@ -396,7 +419,7 @@ export const traceDylibLoading = async (
             root,
             architecture: slice.architecture,
             platforms: slice.platforms,
-            searchPathsUnknown: slice.dyld_environment.length > 0,
+            searchPathsUnknown: hasDyldPathOverrides(slice),
             executable: slice.file_type === "execute" ? root : null,
             loaded: new Map(),
             byInstallName: new Map(),
@@ -423,8 +446,9 @@ export const traceDylibLoading = async (
     const facts = images.get(image);
     return (
       facts?.status === "parsed" &&
-      (facts.slices.find((s) => s.architecture === architecture)
-        ?.dyld_environment.length ?? 0) > 0
+      facts.slices.some(
+        (s) => s.architecture === architecture && hasDyldPathOverrides(s),
+      )
     );
   });
   return {
