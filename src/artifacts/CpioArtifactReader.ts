@@ -1,4 +1,9 @@
-import { Readable } from "node:stream";
+import {
+  PassThrough,
+  Readable,
+  Transform,
+  type TransformCallback,
+} from "node:stream";
 import { createGunzip } from "node:zlib";
 
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
@@ -15,6 +20,8 @@ const MAX_LINK_BUFFER_BYTES = 16 * 1024 * 1024;
 const MAX_LINK_BUFFER_TOTAL = 64 * 1024 * 1024;
 /** Longest symlink target read; PATH_MAX is 1024 on macOS and 4096 on Linux. */
 const MAX_SYMLINK_TARGET_BYTES = 4096;
+/** Total decompressed cpio bytes accepted from one archive (gzip-bomb budget). */
+const MAX_TOTAL_DECOMPRESSED_BYTES = 512 * 1024 * 1024;
 const TRAILER = "TRAILER!!!";
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
@@ -83,6 +90,29 @@ class ByteSource {
 
   async close(): Promise<void> {
     await this.#iterator.return?.();
+  }
+}
+
+/** Bound total decompressed bytes so a gzip bomb cannot exhaust the process. */
+class DecodedBudget extends Transform {
+  #seen = 0;
+
+  override _transform(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    done: TransformCallback,
+  ): void {
+    this.#seen += chunk.length;
+    if (this.#seen > MAX_TOTAL_DECOMPRESSED_BYTES) {
+      done(
+        new ArtifactReaderFailure(
+          "limit",
+          `cpio archive decodes beyond ${MAX_TOTAL_DECOMPRESSED_BYTES} bytes`,
+        ),
+      );
+      return;
+    }
+    done(null, chunk);
   }
 }
 
@@ -250,7 +280,20 @@ export class CpioArtifactReader implements ArtifactReader {
       // Prevent unhandled source errors after the decoder fails first.
       compressed.destroy();
     });
-    const source = new ByteSource(compressed.pipe(gunzip));
+    const budget = new DecodedBudget();
+    gunzip.on("error", (cause: unknown) => {
+      budget.destroy(
+        cause instanceof ArtifactReaderFailure
+          ? cause
+          : new ArtifactReaderFailure("format", "cpio stream failed", {
+              cause,
+            }),
+      );
+    });
+    budget.on("error", () => {
+      compressed.destroy();
+    });
+    const source = new ByteSource(compressed.pipe(gunzip).pipe(budget));
     this.#source = source;
     for (let index = 0; ; index++) {
       if (signal?.aborted === true)

@@ -138,7 +138,26 @@ const visitArtifactEntries = async (
           logicalPath,
         );
       } catch (cause: unknown) {
-        if (!isUnavailableUnpackedEntry(cause, entry)) throw cause;
+        if (!isUnavailableUnpackedEntry(cause, entry)) {
+          // A streamed CRC, size-bound, or format failure is per-member
+          // evidence loss under record-and-continue: keep the occurrence
+          // unavailable with its diagnostic, without inventing a node.
+          if (
+            context.integrity.mode !== "record-and-continue" ||
+            !(cause instanceof ArtifactReaderFailure) ||
+            (cause.reason !== "integrity" &&
+              cause.reason !== "limit" &&
+              cause.reason !== "format")
+          )
+            throw cause;
+          occurrence.hash_status = "unavailable";
+          occurrence.limitations.push(
+            `Member content could not be verified: ${cause.message}`,
+          );
+          context.occurrences.push(occurrence);
+          context.occurrenceByPath.set(logicalPath, occurrence);
+          continue;
+        }
         occurrence.hash_status = "unavailable";
         occurrence.limitations.push(UNAVAILABLE_UNPACKED_LIMITATION);
       }
@@ -204,42 +223,11 @@ const digestArtifactEntry = async (
   )
     return undefined;
   const checksum = entry.declaredChecksum;
-  let digest: Awaited<ReturnType<typeof hashReadable>>;
-  try {
-    digest = await hashReadable(
-      await currentReader.open(entry, context.signal),
-      context.signal,
-      checksum?.algorithm,
-    );
-  } catch (cause: unknown) {
-    // A CRC, archived-checksum, or size-bound failure while streaming is an
-    // integrity mismatch for this member, not the whole inspection, when the
-    // caller selected record-and-continue.
-    if (
-      context.integrity.mode !== "record-and-continue" ||
-      !(cause instanceof ArtifactReaderFailure) ||
-      (cause.reason !== "integrity" &&
-        cause.reason !== "limit" &&
-        cause.reason !== "format")
-    )
-      throw cause;
-    return {
-      node: createArtifactNode({
-        sha256:
-          "0000000000000000000000000000000000000000000000000000000000000000",
-        size: 0,
-        kind: "resource",
-        format: "unknown",
-        executable: entry.executable,
-        contentState: "embedded",
-        limitations: [
-          "Observed content contradicts declared integrity metadata and is untrusted.",
-        ],
-      }),
-      mismatched: true,
-      mismatchDetails: [cause.message],
-    };
-  }
+  const digest = await hashReadable(
+    await currentReader.open(entry, context.signal),
+    context.signal,
+    checksum?.algorithm,
+  );
   const sha256Mismatch =
     entry.declaredSha256 !== null && entry.declaredSha256 !== digest.sha256;
   const checksumMismatch =
