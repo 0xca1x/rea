@@ -96,7 +96,10 @@ export const inspectDyldSharedCache = async (
   const parsed = inspectDyldSharedCacheInputSchema.safeParse(rawInput);
   if (!parsed.success)
     return err(new AnalysisInputError(OPERATION, { cause: parsed.error }));
-  const cachePath = resolve(parsed.data.cache_path);
+  // Keep the caller-selected spelling for result and Evidence metadata; only
+  // filesystem access uses the resolved path.
+  const selectedPath = parsed.data.cache_path;
+  const cachePath = resolve(selectedPath);
   let cache: DyldSharedCache | undefined;
   try {
     cache = await DyldSharedCache.open(cachePath, signal);
@@ -114,7 +117,7 @@ export const inspectDyldSharedCache = async (
     const subcacheSha = await cache.subcacheSha256(signal);
     return ok(
       dyldSharedCacheResultSchema.parse({
-        cache_path: cachePath,
+        cache_path: selectedPath,
         // The header and image list were read through this same handle.
         main_file_sha256: mainSha,
         ...cache.header,
