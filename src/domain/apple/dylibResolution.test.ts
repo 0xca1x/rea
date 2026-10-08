@@ -585,6 +585,9 @@ describe("shared cache resolution", () => {
     expect(trace.images.map(({ path }) => path)).toEqual([MAIN]);
     expect(trace.coverage.status).toBe("complete");
     expect(trace.limitations).toContainEqual(
+      expect.stringContaining("transitive dependencies were not traversed"),
+    );
+    expect(trace.limitations).toContainEqual(
       expect.stringContaining(
         "looked up only in the supplied dyld shared cache",
       ),

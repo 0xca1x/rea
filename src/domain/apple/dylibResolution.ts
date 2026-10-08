@@ -418,6 +418,15 @@ export const traceDylibLoading = async (
     limitations: [
       ...DYLIB_RESOLUTION_LIMITATIONS,
       ...sharedCacheLimitations(request.sharedCache, unserved),
+      ...(edges.some(
+        (edge) =>
+          edge.command !== "LC_LAZY_LOAD_DYLIB" &&
+          edge.candidates.some(({ outcome }) => outcome === "shared-cache"),
+      )
+        ? [
+            "Cache-backed images are leaf references: their load commands and transitive dependencies were not traversed. Complete coverage describes the selected roots and in-root images, not a complete process-wide dependency graph. Use inspect_dyld_shared_cache with selected images to inspect cached load commands.",
+          ]
+        : []),
       ...(environmentRoots.length === 0
         ? []
         : [
