@@ -59,25 +59,29 @@ export const signatureVerification = (
   path: string,
   unsigned: boolean,
 ): NonNullable<InspectSignature["verification"]> => {
+  // Preserve trailing whitespace: a nested path may end in a space or tab.
+  // Strip only the line delimiter and leading whitespace for record parsing.
   const lines = `${capture.stderr}\n${capture.stdout}`
     .split(/\r?\n/u)
-    .map((line) => line.trim())
+    .map((line) => line.replace(/\r$/u, ""))
     .filter((line) => line.length > 0);
+  const record = (line: string): string => line.replace(/^\s+/u, "");
   return {
     path,
     status:
       capture.exitCode === 0 ? "valid" : unsigned ? "unsigned" : "invalid",
     exit_code: capture.exitCode,
     diagnostics: lines.filter(
-      (line) => !/^--(?:prepared|validated):/u.test(line),
+      (line) => !/^--(?:prepared|validated):/u.test(record(line)),
     ),
     validated_nested_code: [
       ...new Set(
-        lines.flatMap((line) =>
-          line.startsWith("--validated:")
-            ? [line.slice("--validated:".length)]
-            : [],
-        ),
+        lines.flatMap((line) => {
+          const trimmed = record(line);
+          return trimmed.startsWith("--validated:")
+            ? [trimmed.slice("--validated:".length)]
+            : [];
+        }),
       ),
     ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
   };
@@ -122,10 +126,16 @@ export const stapledTicket = async (
     try {
       const opened = await handle.stat();
       if (!opened.isFile()) return absent;
-      // If the path was replaced between lstat and open, hash the bytes the
-      // handle actually refers to; dev/ino mismatch means the ticket changed.
-      void metadata;
-      void opened;
+      // If the path was replaced between lstat and open, or during hashing,
+      // the digest would describe the wrong bytes; report it as changed.
+      if (opened.dev !== metadata.dev || opened.ino !== metadata.ino)
+        return {
+          status: "unreadable",
+          path: relative,
+          sha256: null,
+          size: null,
+          reason: "changed",
+        };
       const hash = createHash("sha256");
       const buffer = new Uint8Array(HASH_CHUNK_BYTES);
       let size = 0;
@@ -137,6 +147,15 @@ export const stapledTicket = async (
         hash.update(buffer.subarray(0, bytesRead));
       }
       signal?.throwIfAborted();
+      const closing = await handle.stat();
+      if (closing.dev !== opened.dev || closing.ino !== opened.ino)
+        return {
+          status: "unreadable",
+          path: relative,
+          sha256: null,
+          size: null,
+          reason: "changed",
+        };
       return {
         status: "present",
         path: relative,
