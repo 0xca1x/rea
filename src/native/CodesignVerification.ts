@@ -11,6 +11,20 @@ export const codesignReason = (line: string, path: string): string => {
   return line;
 };
 
+/** Remove the complete selected path before splitting lines, including embedded LF bytes. */
+export const codesignReasons = (
+  capture: NativeCommandCapture,
+  path: string,
+): string[] => {
+  const observed = `${capture.stderr}\n${capture.stdout}`;
+  const text =
+    path.length === 0 ? observed : observed.split(path).join("$SELECTED_PATH");
+  return text
+    .split("\n")
+    .filter((line) => !/^--(?:prepared|validated):/u.test(line))
+    .map((line) => codesignReason(line, "$SELECTED_PATH"));
+};
+
 /** Classify only explicit diagnostic reasons; nonzero exit alone proves no invalidity. */
 const verificationStatus = (
   capture: NativeCommandCapture,
@@ -59,7 +73,7 @@ export const signatureVerification = (
     path,
     status: verificationStatus(
       capture,
-      diagnostics.map((line) => codesignReason(line, path)),
+      codesignReasons(capture, path),
       unsigned,
     ),
     exit_code: capture.exitCode,

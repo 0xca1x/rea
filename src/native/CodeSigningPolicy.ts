@@ -69,7 +69,7 @@ interface PostureInput {
 const platformBinary = (
   input: PostureInput,
 ): "apple" | "unverified" | "none" =>
-  (input.codeDirectory?.platform_identifier ?? null) === null
+  (input.codeDirectory?.platform_identifier ?? 0) === 0
     ? "none"
     : input.appleOrigin
       ? "apple"

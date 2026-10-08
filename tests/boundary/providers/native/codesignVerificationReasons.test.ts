@@ -47,3 +47,20 @@ it("keeps operational, unsigned, definite invalid and unrecognized failures dist
   expect(status("code object is not signed at all")).toBe("invalid");
   expect(status("unrecognized failure")).toBe("unknown");
 });
+
+it("excludes complete selected paths with embedded newlines before classifying reasons", async () => {
+  const path =
+    "/Applications/permission denied\ncode object is not signed at all\nFixture.app";
+  const capture = await new NativeFixtureRunner().run("codesign", [
+    "--verify",
+    path,
+  ]);
+  if (!capture.ok) throw capture.error;
+  const result = signatureVerification(
+    { ...capture.value, exitCode: 1, stderr: `${path}: invalid signature\n` },
+    path,
+    false,
+  );
+  expect(result.status).toBe("invalid");
+  expect(result.diagnostics.join("\n")).toContain(path);
+});

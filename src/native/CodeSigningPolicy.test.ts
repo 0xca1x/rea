@@ -50,6 +50,23 @@ describe("CodeDirectory flags", () => {
 });
 
 describe("derived security facets", () => {
+  it("does not apply platform policy for a reported zero platform byte", () => {
+    expect(
+      states(
+        derive({
+          signed: true,
+          codeDirectory: directory(0x2, 0),
+          entitlements: null,
+          entitlementsKnown: true,
+          appleOrigin: true,
+        }),
+      ),
+    ).toMatchObject({
+      "library-validation": "not-enforced",
+      "dyld-environment-variables": "honored",
+      "debugger-attach": "allowed",
+    });
+  });
   it("treats unsigned and plain ad hoc code as unrestricted", () => {
     for (const signed of [false, true])
       expect(

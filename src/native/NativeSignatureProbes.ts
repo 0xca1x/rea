@@ -3,7 +3,7 @@ import type { AnalysisError } from "../domain/analysisErrorBase.js";
 import { canonicalJson } from "../domain/comparisonSemantics.js";
 import { ok, type Result } from "../domain/result.js";
 import type { NativeCommandCapture } from "./CommandRunner.js";
-import { codesignReason } from "./CodesignVerification.js";
+import { codesignReasons } from "./CodesignVerification.js";
 import { parseCodeSignature } from "./parsers/codesign.js";
 import { parseSignatureEntitlements } from "./NativeSignatureEntitlements.js";
 import {
@@ -24,13 +24,11 @@ export const unsignedSignatureCapture = (
 ): boolean =>
   capture.exitCode !== null &&
   capture.exitCode !== 0 &&
-  `${capture.stderr}\n${capture.stdout}`
-    .split("\n")
-    .some((line) =>
-      /^(?:code object is not signed at all|code object is not signed|not signed at all)/iu.test(
-        codesignReason(line, path),
-      ),
-    );
+  codesignReasons(capture, path).some((reason) =>
+    /^(?:code object is not signed at all|code object is not signed|not signed at all)/iu.test(
+      reason,
+    ),
+  );
 
 /** Slice observations and aggregate knowledge, with every contributing capture retained. */
 export interface SignatureSliceObservation {

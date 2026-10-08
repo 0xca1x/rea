@@ -116,10 +116,7 @@ export const inspectNativeSignature = async (options: {
   if (!verified.ok) return verified;
   const captures = [display, requirements, entitlements, verified.value];
   let appleOrigin = false;
-  if (
-    !unsigned &&
-    (parsed.code_directory?.platform_identifier ?? null) !== null
-  ) {
+  if (!unsigned && (parsed.code_directory?.platform_identifier ?? 0) !== 0) {
     const anchor = await capture(["--verify", "-R=anchor apple", code], signal);
     if (!anchor.ok) return anchor;
     captures.push(anchor.value);
