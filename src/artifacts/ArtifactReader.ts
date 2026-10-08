@@ -1,6 +1,7 @@
 import type { Readable } from "node:stream";
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
 import type { ZipPackageFormat } from "../domain/zipPackageFormat.js";
+import type { ArtifactDecodedBudget } from "./ArtifactDecodedBudget.js";
 
 /** Archive-neutral entry metadata. Reader adapters never choose output paths. */
 export interface ArtifactEntry {
@@ -46,6 +47,8 @@ export interface ArtifactChecksumObservation {
 /** Read-only adapter over one directory, archive, or virtual container. */
 export interface ArtifactReader {
   readonly format: "directory" | ZipPackageFormat | "asar" | "pkg" | "file";
+  /** Shared safety budget for compressed representations and nested archives. */
+  readonly decodedBudget?: ArtifactDecodedBudget;
   entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry>;
   open(entry: ArtifactEntry, signal?: AbortSignal): Promise<Readable>;
   /** Checksums observed after the complete member stream has been consumed. */

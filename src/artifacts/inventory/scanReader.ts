@@ -182,6 +182,7 @@ const visitArtifactEntries = async (
             ? new CpioArtifactReader(
                 (signal) => parent.open(entry, signal),
                 context.integrity.mode,
+                parent.decodedBudget,
               )
             : new AsarArtifactReader(entry.adapterKey);
         // Only traversed containers can own members, not opaque archive-named files.

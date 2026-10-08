@@ -11,6 +11,12 @@ import { createInflate, inflateSync } from "node:zlib";
 import { DOMParser, type Element, type Node } from "@xmldom/xmldom";
 
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
+import { ArtifactDecodedBudget } from "./ArtifactDecodedBudget.js";
+import {
+  xarInteger as integer,
+  xarHeapPosition,
+  XarPathBudget,
+} from "./XarValidation.js";
 import {
   ArtifactReaderFailure,
   type ArtifactEntry,
@@ -84,16 +90,6 @@ const childElement = (element: Element, name: string): Element | undefined =>
 
 const textOf = (element: Element, name: string): string | undefined =>
   childElement(element, name)?.textContent ?? undefined;
-
-const integer = (value: string | undefined, label: string): number => {
-  const parsed = value === undefined ? Number.NaN : Number(value.trim());
-  if (!Number.isSafeInteger(parsed) || parsed < 0)
-    throw new ArtifactReaderFailure(
-      "format",
-      `xar TOC has an invalid ${label}`,
-    );
-  return parsed;
-};
 
 const parseChecksum = (
   parent: Element,
@@ -200,6 +196,7 @@ const classifyMemberType = (
 /** Walk nested `<file>` elements in document order. */
 const collectMembers = (toc: Element): XarMember[] => {
   const members: XarMember[] = [];
+  const paths = new XarPathBudget();
   const pending: Array<{ readonly element: Element; readonly parent: string }> =
     childElements(toc, "file")
       .map((element) => ({ element, parent: "" }))
@@ -216,7 +213,7 @@ const collectMembers = (toc: Element): XarMember[] => {
       name === ".."
     )
       throw new ArtifactReaderFailure("path", "xar member has an unsafe name");
-    const path = next.parent === "" ? name : `${next.parent}/${name}`;
+    const path = paths.join(next.parent, name);
     const type = textOf(next.element, "type")?.trim();
     const modeText = textOf(next.element, "mode");
     const mode =
@@ -272,6 +269,8 @@ class SizeBound extends Transform {
   constructor(
     private readonly path: string,
     private readonly expected: number,
+    private readonly budget: ArtifactDecodedBudget,
+    private readonly signal?: AbortSignal,
   ) {
     super();
     this.#cap = Math.min(expected, MAX_DECODED_MEMBER_BYTES);
@@ -282,6 +281,21 @@ class SizeBound extends Transform {
     _encoding: BufferEncoding,
     done: TransformCallback,
   ): void {
+    if (this.signal?.aborted) {
+      done(
+        new ArtifactReaderFailure(
+          "cancelled",
+          `xar member decoding cancelled: ${this.path}`,
+        ),
+      );
+      return;
+    }
+    try {
+      this.budget.consume(chunk.length, this.path);
+    } catch (cause: unknown) {
+      done(cause instanceof Error ? cause : new Error(String(cause)));
+      return;
+    }
     this.#seen += chunk.length;
     if (this.#seen > this.#cap) {
       done(
@@ -372,6 +386,8 @@ export class XarArtifactReader implements ArtifactReader {
   readonly format = "pkg" as const;
   #handle: FileHandle | undefined;
   #heap = 0;
+  #size = 0;
+  readonly decodedBudget: ArtifactDecodedBudget;
   #members: readonly XarMember[] = [];
   readonly #integrity = new Map<string, ArtifactChecksumObservation[]>();
 
@@ -386,9 +402,13 @@ export class XarArtifactReader implements ArtifactReader {
    */
   constructor(
     private readonly path: string,
-    options: { readonly verifyChecksums?: boolean } = {},
+    options: {
+      readonly verifyChecksums?: boolean;
+      readonly decodedBudget?: ArtifactDecodedBudget;
+    } = {},
   ) {
     this.#verifyChecksums = options.verifyChecksums ?? true;
+    this.decodedBudget = options.decodedBudget ?? new ArtifactDecodedBudget();
   }
 
   async #load(signal?: AbortSignal): Promise<void> {
@@ -396,6 +416,7 @@ export class XarArtifactReader implements ArtifactReader {
     cancelled(signal);
     const handle = await open(this.path, "r");
     this.#handle = handle;
+    this.#size = (await handle.stat()).size;
     const header = Buffer.alloc(28);
     const { bytesRead } = await handle.read(header, 0, 28, 0);
     if (bytesRead < 28 || header.readUInt32BE(0) !== XAR_MAGIC)
@@ -536,18 +557,23 @@ export class XarArtifactReader implements ArtifactReader {
     const handle = this.#handle;
     if (handle === undefined)
       throw new ArtifactReaderFailure("unavailable", "xar archive is closed");
+    const position = xarHeapPosition(this.#heap, offset, length, this.#size);
     const bytes = Buffer.alloc(length);
-    const { bytesRead } = await handle.read(
-      bytes,
-      0,
-      length,
-      this.#heap + offset,
-    );
-    if (bytesRead < length)
-      throw new ArtifactReaderFailure(
-        "format",
-        "xar member extends beyond the archive",
+    let done = 0;
+    while (done < length) {
+      const { bytesRead } = await handle.read(
+        bytes,
+        done,
+        length - done,
+        position + done,
       );
+      if (bytesRead === 0)
+        throw new ArtifactReaderFailure(
+          "format",
+          "xar member extends beyond the archive",
+        );
+      done += bytesRead;
+    }
     return bytes;
   }
 
@@ -744,7 +770,12 @@ export class XarArtifactReader implements ArtifactReader {
         inflate.destroy(memberFailure(entry.path, cause)),
       );
       const inflated = archivedChecked.pipe(inflate);
-      const bounded = new SizeBound(entry.path, data.size);
+      const bounded = new SizeBound(
+        entry.path,
+        data.size,
+        this.decodedBudget,
+        signal,
+      );
       inflated.on("error", (cause: unknown) =>
         bounded.destroy(memberFailure(entry.path, cause)),
       );

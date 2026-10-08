@@ -1,6 +1,6 @@
 /** xar archives and cpio payloads built field by field for installer-package tests. */
 import { createHash } from "node:crypto";
-import { deflateSync, gzipSync } from "node:zlib";
+import { deflateSync, gzipSync, inflateSync } from "node:zlib";
 
 export interface XarFixtureMember {
   readonly name: string;
@@ -147,3 +147,21 @@ export const MODE = {
   symlink: 0o120755,
   fifo: 0o010644,
 } as const;
+
+/** Mutate a fixture's XML while keeping its compressed TOC checksum/lengths consistent. */
+export const rewriteXarToc = (
+  archive: Uint8Array,
+  rewrite: (xml: string) => string,
+): Uint8Array => {
+  const input = Buffer.from(archive);
+  const oldLength = Number(input.readBigUInt64BE(8));
+  const decoded = inflateSync(input.subarray(28, 28 + oldLength));
+  const xml = Buffer.from(rewrite(decoded.toString("utf8")));
+  const compressed = deflateSync(xml);
+  const header = Buffer.from(input.subarray(0, 28));
+  header.writeBigUInt64BE(BigInt(compressed.length), 8);
+  header.writeBigUInt64BE(BigInt(xml.length), 16);
+  const heap = Buffer.from(input.subarray(28 + oldLength));
+  createHash("sha1").update(compressed).digest().copy(heap, 0);
+  return Buffer.concat([header, compressed, heap]);
+};

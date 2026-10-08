@@ -172,8 +172,10 @@ const materializeSelection = async ({
       registry.add(path, expandable ? "directory" : entry.kind);
       if (expandable) {
         const parent = frame.reader;
-        const nested = new CpioArtifactReader((nestedSignal) =>
-          parent.open(entry, nestedSignal),
+        const nested = new CpioArtifactReader(
+          (nestedSignal) => parent.open(entry, nestedSignal),
+          "fail",
+          parent.decodedBudget,
         );
         stack.push({
           reader: nested,

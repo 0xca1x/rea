@@ -1,4 +1,8 @@
-import { Readable, Transform, type TransformCallback } from "node:stream";
+import { Readable } from "node:stream";
+import {
+  ArtifactBudgetTransform,
+  ArtifactDecodedBudget,
+} from "./ArtifactDecodedBudget.js";
 import { createGunzip } from "node:zlib";
 
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
@@ -15,8 +19,6 @@ const MAX_LINK_BUFFER_BYTES = 16 * 1024 * 1024;
 const MAX_LINK_BUFFER_TOTAL = 64 * 1024 * 1024;
 /** Longest symlink target read; PATH_MAX is 1024 on macOS and 4096 on Linux. */
 const MAX_SYMLINK_TARGET_BYTES = 4096;
-/** Total decompressed cpio bytes accepted from one archive (gzip-bomb budget). */
-const MAX_TOTAL_DECOMPRESSED_BYTES = 512 * 1024 * 1024;
 const TRAILER = "TRAILER!!!";
 const S_IFMT = 0o170000;
 const S_IFDIR = 0o040000;
@@ -85,29 +87,6 @@ class ByteSource {
 
   async close(): Promise<void> {
     await this.#iterator.return?.();
-  }
-}
-
-/** Bound total decompressed bytes so a gzip bomb cannot exhaust the process. */
-class DecodedBudget extends Transform {
-  #seen = 0;
-
-  override _transform(
-    chunk: Buffer,
-    _encoding: BufferEncoding,
-    done: TransformCallback,
-  ): void {
-    this.#seen += chunk.length;
-    if (this.#seen > MAX_TOTAL_DECOMPRESSED_BYTES) {
-      done(
-        new ArtifactReaderFailure(
-          "limit",
-          `cpio archive decodes beyond ${MAX_TOTAL_DECOMPRESSED_BYTES} bytes`,
-        ),
-      );
-      return;
-    }
-    done(null, chunk);
   }
 }
 
@@ -252,6 +231,7 @@ const symlinkTargetLimitation = (
 export class CpioArtifactReader implements ArtifactReader {
   readonly format = "file" as const;
   #source: ByteSource | undefined;
+  #signal: AbortSignal | undefined;
   #current:
     | {
         readonly key: string;
@@ -276,9 +256,11 @@ export class CpioArtifactReader implements ArtifactReader {
      * siblings are still inventoried, instead of aborting the archive.
      */
     private readonly integrity: "fail" | "record-and-continue" = "fail",
+    readonly decodedBudget: ArtifactDecodedBudget = new ArtifactDecodedBudget(),
   ) {}
 
   async *entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry> {
+    this.#signal = signal;
     const compressed = await this.openCompressed(signal);
     const gunzip = createGunzip();
     // `pipe()` does not forward source errors (cancellation, truncation);
@@ -296,7 +278,11 @@ export class CpioArtifactReader implements ArtifactReader {
       // Prevent unhandled source errors after the decoder fails first.
       compressed.destroy();
     });
-    const budget = new DecodedBudget();
+    const budget = new ArtifactBudgetTransform(
+      this.decodedBudget,
+      "gzip-cpio",
+      signal,
+    );
     gunzip.on("error", (cause: unknown) => {
       budget.destroy(
         cause instanceof ArtifactReaderFailure
@@ -308,6 +294,7 @@ export class CpioArtifactReader implements ArtifactReader {
     });
     budget.on("error", () => {
       compressed.destroy();
+      gunzip.destroy();
     });
     const source = new ByteSource(compressed.pipe(gunzip).pipe(budget));
     this.#source = source;
@@ -595,7 +582,9 @@ export class CpioArtifactReader implements ArtifactReader {
     path: string,
   ): AsyncGenerator<Buffer> {
     let sum = 0;
+    this.#cancelled();
     for await (const chunk of source.take(header.fileSize, "member data")) {
+      this.#cancelled();
       if (header.format === "crc")
         for (const byte of chunk) sum = (sum + byte) >>> 0;
       yield chunk;
@@ -606,6 +595,7 @@ export class CpioArtifactReader implements ArtifactReader {
     await drain(
       source.take(padding(header.format, header.fileSize), "data padding"),
     );
+    this.#cancelled();
     if (header.format === "crc" && sum !== header.check)
       throw new ArtifactReaderFailure(
         "integrity",
@@ -622,6 +612,14 @@ export class CpioArtifactReader implements ArtifactReader {
     for await (const chunk of this.#verified(source, header, path))
       chunks.push(chunk);
     return Buffer.concat(chunks);
+  }
+
+  #cancelled(): void {
+    if (this.#signal?.aborted)
+      throw new ArtifactReaderFailure(
+        "cancelled",
+        "cpio expansion was cancelled",
+      );
   }
 
   open(entry: ArtifactEntry): Promise<Readable> {
