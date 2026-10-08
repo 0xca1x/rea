@@ -154,7 +154,7 @@ export const traceDylibResolution = async (options: {
       cache === undefined || parsed.data.shared_cache === undefined
         ? null
         : {
-            path: resolve(parsed.data.shared_cache),
+            path: parsed.data.shared_cache,
             uuid: cache.header.uuid,
             architecture: cache.header.architecture,
             os_version: cache.header.os_version,

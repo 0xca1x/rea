@@ -245,6 +245,7 @@ describe("trace-dylib-resolution CLI inputs", () => {
         (result.json as { normalized_result: unknown }).normalized_result,
       );
       expect(trace.shared_cache).toMatchObject({
+        path: join(directory, "dyld_shared_cache_arm64e"),
         architecture: "arm64e",
         os_version: "26.6.0",
       });

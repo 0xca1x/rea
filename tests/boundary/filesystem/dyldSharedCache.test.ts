@@ -1,5 +1,6 @@
+import { createHash } from "node:crypto";
 import { rm, writeFile } from "node:fs/promises";
-import { join } from "node:path";
+import { dirname, join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
@@ -9,6 +10,7 @@ import {
 } from "../../../src/artifacts/apple/DyldSharedCache.fixture.js";
 import {
   FILE_TYPE,
+  buildVersionCommand,
   LC,
   dylibCommand,
   dylibUseCommand,
@@ -19,6 +21,7 @@ import {
   inspectDyldSharedCacheEvidence,
 } from "../../../src/application/apple/DyldSharedCacheService.js";
 import { dyldSharedCacheResultSchema } from "../../../src/domain/apple/dyldSharedCache.js";
+import { traceDylibResolution } from "../../../src/artifacts/apple/DylibResolutionReader.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 const dylib = (installName: string, dependencies: readonly Uint8Array[] = []) =>
@@ -185,4 +188,33 @@ describe("dyld shared cache inspection", () => {
       confidence: "observed",
     });
   });
+});
+
+it("retains a relative caller-selected cache path in trace and inspection metadata", async () => {
+  const path = await writeCache(dyldCacheFixture(IMAGES));
+  const selected = relative(process.cwd(), path);
+  const targetPath = join(dirname(path), "tool");
+  const bytes = machoImage({
+    fileType: FILE_TYPE.execute,
+    commands: [
+      buildVersionCommand(1),
+      dylibCommand(LC.LOAD_DYLIB, "/usr/lib/libSystem.B.dylib"),
+    ],
+  });
+  await writeFile(targetPath, bytes);
+  const trace = await traceDylibResolution({
+    rootPath: dirname(path),
+    targetPath,
+    targetSha256: createHash("sha256").update(bytes).digest("hex"),
+    enumerateRoots: false,
+    parameters: { shared_cache: selected },
+  });
+  expect(trace.shared_cache?.path).toBe(selected);
+  expect(trace.shared_cache?.main_file_sha256).toMatch(/^[a-f0-9]{64}$/u);
+  expect(trace.edges[0]?.resolution.status).toBe("shared-cache");
+  const inspected = await inspectDyldSharedCacheEvidence({
+    cache_path: selected,
+  });
+  if (!inspected.ok) throw inspected.error;
+  expect(inspected.value.parameters).toMatchObject({ cache_path: selected });
 });
