@@ -63,7 +63,7 @@ const verificationStatus = (
   );
   if (
     reasons.some((reason) =>
-      /^(?:a sealed resource is missing or invalid|code or signature modified|invalid signature|invalid or unsupported format|resource envelope is obsolete|signature is invalid|unsealed contents present|file modified:|file added:|a resource envelope is obsolete)/iu.test(
+      /^(?:a sealed resource is missing or invalid|code or signature modified|invalid signature|invalid or unsupported format|resource envelope is obsolete|signature is invalid|unsealed contents present|file modified:|file added:|a resource envelope is obsolete|resource fork, Finder information, or similar detritus not allowed)/iu.test(
         reason,
       ),
     )
