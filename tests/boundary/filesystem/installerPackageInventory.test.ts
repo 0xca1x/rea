@@ -184,3 +184,44 @@ describe("installer package inventory", () => {
     });
   });
 });
+
+describe("installer package CRC recovery", () => {
+  it("recovers later siblings after a misaligned CRC mismatch", async () => {
+    const directory = await createTestTempDirectory("rea-pkg-crc-align-");
+    const path = join(directory, "Installer.pkg");
+    await writeFile(
+      path,
+      xarArchive([
+        {
+          name: "Payload",
+          // "abc" is 3 bytes (1 padding byte): a CRC failure here must not
+          // desynchronize the following member.
+          data: gzipCpio(
+            [
+              { name: "./bad", mode: MODE.file, data: "abc", check: 1 },
+              { name: "./good", mode: MODE.file, data: "ok" },
+            ],
+            "crc",
+          ),
+        },
+      ]),
+    );
+    const inventory = artifactInventoryResultSchema.parse(
+      parseEvidence(
+        await runProviderAnalysis(path, "inventory_artifact", {
+          integrity_policy: "record-and-continue",
+        }),
+      ).normalized_result,
+    );
+    expect(
+      inventory.occurrences.find(
+        ({ logical_path: logical }) => logical === "Payload/bad",
+      ),
+    ).toMatchObject({ hash_status: "unavailable" });
+    expect(
+      inventory.occurrences.find(
+        ({ logical_path: logical }) => logical === "Payload/good",
+      ),
+    ).toMatchObject({ hash_status: "verified" });
+  });
+});

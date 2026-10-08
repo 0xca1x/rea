@@ -134,6 +134,48 @@ const parseData = (file: Element): XarData | undefined => {
   };
 };
 
+/**
+ * Raw members must describe their stored bytes exactly; otherwise the source
+ * range would extend into adjacent heap entries.
+ */
+const assertRawSize = (member: XarMember, data: XarData | undefined): void => {
+  if (
+    data !== undefined &&
+    data.encoding === "application/octet-stream" &&
+    data.size !== data.length
+  )
+    throw new ArtifactReaderFailure(
+      "format",
+      `xar member ${member.path} declares size ${data.size} with length ${data.length}`,
+    );
+};
+
+/** Entry limitations from the TOC record and nested-archive classification. */
+const memberLimitations = (
+  member: XarMember,
+  unsupportedChecksum: XarData["unsupportedChecksum"],
+  classified: { readonly limitations: readonly string[] },
+): string[] => [
+  ...(member.kind === "symlink" && member.link !== undefined
+    ? [`Symlink target recorded in the TOC: ${member.link}`]
+    : []),
+  ...(unsupportedChecksum === undefined
+    ? []
+    : [
+        `Member declares unsupported checksum ${unsupportedChecksum.style}; integrity not verified.`,
+      ]),
+  ...classified.limitations,
+];
+
+/** File, directory, symlink, or an explicitly unsupported TOC type. */
+const classifyMemberType = (
+  type: string | undefined,
+): { readonly kind: XarMember["kind"]; readonly unsupportedType?: string } => {
+  if (type === "directory" || type === "symlink") return { kind: type };
+  if (type === undefined || type === "file") return { kind: "file" };
+  return { kind: "file", unsupportedType: type };
+};
+
 /** Walk nested `<file>` elements in document order. */
 const collectMembers = (toc: Element): XarMember[] => {
   const members: XarMember[] = [];
@@ -158,21 +200,7 @@ const collectMembers = (toc: Element): XarMember[] => {
     const modeText = textOf(next.element, "mode");
     const mode =
       modeText === undefined ? Number.NaN : Number.parseInt(modeText.trim(), 8);
-    const kind =
-      type === "directory"
-        ? "directory"
-        : type === "symlink"
-          ? "symlink"
-          : type === undefined || type === "file"
-            ? "file"
-            : "file";
-    const unsupportedType =
-      type !== undefined &&
-      type !== "file" &&
-      type !== "directory" &&
-      type !== "symlink"
-        ? type
-        : undefined;
+    const { kind, unsupportedType } = classifyMemberType(type);
     members.push({
       path,
       kind,
@@ -348,10 +376,20 @@ export class XarArtifactReader implements ArtifactReader {
     this.#heap = headerSize + compressed.length;
     let xml: string;
     try {
-      xml = inflateSync(compressed, {
+      const inflated = inflateSync(compressed, {
         maxOutputLength: MAX_TOC_BYTES,
-      }).toString("utf8");
+      });
+      try {
+        xml = new TextDecoder("utf-8", { fatal: true }).decode(inflated);
+      } catch (cause: unknown) {
+        throw new ArtifactReaderFailure(
+          "format",
+          "xar TOC is not valid UTF-8",
+          { cause },
+        );
+      }
     } catch (cause: unknown) {
+      if (cause instanceof ArtifactReaderFailure) throw cause;
       throw new ArtifactReaderFailure("format", "xar TOC is not zlib data", {
         cause,
       });
@@ -486,75 +524,58 @@ export class XarArtifactReader implements ArtifactReader {
     await this.#load(signal);
     for (const member of this.#members) {
       cancelled(signal);
-      if (member.unsupportedType !== undefined) {
-        yield {
-          path: member.path,
-          kind: "file",
-          declaredSize: null,
-          compressedSize: null,
-          executable: false,
-          encrypted: false,
-          byteOffset: null,
-          declaredSha256: null,
-          unpacked: false,
-          limitations: [
-            `Unsupported xar member type ${member.unsupportedType}; content not expanded.`,
-          ],
-          adapterKey: member.path,
-          contentUnavailable: true,
-        };
-        continue;
-      }
-      const data = member.data;
-      // Raw members must describe their stored bytes exactly; otherwise the
-      // source range would extend into adjacent heap entries.
-      if (
-        data !== undefined &&
-        data.encoding === "application/octet-stream" &&
-        data.size !== data.length
-      )
-        throw new ArtifactReaderFailure(
-          "format",
-          `xar member ${member.path} declares size ${data.size} with length ${data.length}`,
-        );
-      const unsupportedChecksum = data?.unsupportedChecksum;
-      const classified =
-        member.kind === "file" && unsupportedChecksum === undefined
-          ? await this.#nestedArchive(member)
-          : {
-              nested: undefined as XarNestedArchive | undefined,
-              limitations: [] as readonly string[],
-            };
-      yield {
+      yield await this.#memberEntry(member);
+    }
+  }
+
+  /** Project one TOC member as an archive-neutral entry. */
+  async #memberEntry(member: XarMember): Promise<ArtifactEntry> {
+    if (member.unsupportedType !== undefined)
+      return {
         path: member.path,
-        kind: member.kind,
-        declaredSize: member.data?.size ?? (member.kind === "file" ? 0 : null),
-        compressedSize: member.data?.length ?? null,
-        executable: member.mode !== null && (member.mode & 0o111) !== 0,
+        kind: "file",
+        declaredSize: null,
+        compressedSize: null,
+        executable: false,
         encrypted: false,
-        byteOffset:
-          member.data?.encoding === "application/octet-stream"
-            ? this.#heap + member.data.offset
-            : null,
-        ...declaredDigest(member.data?.extractedChecksum),
+        byteOffset: null,
+        declaredSha256: null,
         unpacked: false,
         limitations: [
-          ...(member.kind === "symlink" && member.link !== undefined
-            ? [`Symlink target recorded in the TOC: ${member.link}`]
-            : []),
-          ...(unsupportedChecksum === undefined
-            ? []
-            : [
-                `Member declares unsupported checksum ${unsupportedChecksum.style}; integrity not verified.`,
-              ]),
-          ...classified.limitations,
+          `Unsupported xar member type ${member.unsupportedType}; content not expanded.`,
         ],
         adapterKey: member.path,
-        ...(classified.nested === undefined
-          ? {}
-          : { nestedArchive: classified.nested }),
+        contentUnavailable: true,
       };
-    }
+    const data = member.data;
+    assertRawSize(member, data);
+    const unsupportedChecksum = data?.unsupportedChecksum;
+    const classified =
+      member.kind === "file" && unsupportedChecksum === undefined
+        ? await this.#nestedArchive(member)
+        : {
+            nested: undefined as XarNestedArchive | undefined,
+            limitations: [] as readonly string[],
+          };
+    return {
+      path: member.path,
+      kind: member.kind,
+      declaredSize: member.data?.size ?? (member.kind === "file" ? 0 : null),
+      compressedSize: member.data?.length ?? null,
+      executable: member.mode !== null && (member.mode & 0o111) !== 0,
+      encrypted: false,
+      byteOffset:
+        member.data?.encoding === "application/octet-stream"
+          ? this.#heap + member.data.offset
+          : null,
+      ...declaredDigest(member.data?.extractedChecksum),
+      unpacked: false,
+      limitations: memberLimitations(member, unsupportedChecksum, classified),
+      adapterKey: member.path,
+      ...(classified.nested === undefined
+        ? {}
+        : { nestedArchive: classified.nested }),
+    };
   }
 
   async open(entry: ArtifactEntry, signal?: AbortSignal): Promise<Readable> {
@@ -612,6 +633,12 @@ export class XarArtifactReader implements ArtifactReader {
       // declared extracted size so a gzip bomb cannot exhaust the process.
       const inflate = createInflate();
       raw.on("error", (cause: unknown) =>
+        inflate.destroy(memberFailure(entry.path, cause)),
+      );
+      // Checksum failures emit on archivedChecked, which pipe() does not
+      // forward; without this the integrity error becomes unhandled instead
+      // of rolling back extraction with the tagged failure.
+      archivedChecked.on("error", (cause: unknown) =>
         inflate.destroy(memberFailure(entry.path, cause)),
       );
       const inflated = archivedChecked.pipe(inflate);

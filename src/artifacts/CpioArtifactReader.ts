@@ -1,9 +1,4 @@
-import {
-  PassThrough,
-  Readable,
-  Transform,
-  type TransformCallback,
-} from "node:stream";
+import { Readable, Transform, type TransformCallback } from "node:stream";
 import { createGunzip } from "node:zlib";
 
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
@@ -533,14 +528,17 @@ export class CpioArtifactReader implements ArtifactReader {
         for (const byte of chunk) sum = (sum + byte) >>> 0;
       yield chunk;
     }
+    // Consume padding before reporting a mismatch: under record-and-continue
+    // iteration resumes after this error, and leftover padding would be read
+    // as the next header's magic.
+    await drain(
+      source.take(padding(header.format, header.fileSize), "data padding"),
+    );
     if (header.format === "crc" && sum !== header.check)
       throw new ArtifactReaderFailure(
         "integrity",
         `cpio CRC disagrees with content: ${path}`,
       );
-    await drain(
-      source.take(padding(header.format, header.fileSize), "data padding"),
-    );
   }
 
   async #collect(
