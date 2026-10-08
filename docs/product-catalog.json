@@ -10,7 +10,7 @@
     "skill_version": "32"
   },
   "tools": {
-    "total": 138,
+    "total": 139,
     "families": [
       {
         "id": "direct",
@@ -100,12 +100,13 @@
       {
         "id": "artifact",
         "surface": "artifact-provider",
-        "count": 6,
+        "count": 7,
         "tools": [
           "decode_interface_builder",
           "extract_artifact",
           "inspect_artifact",
           "inspect_asset_catalog",
+          "inspect_evm_interface",
           "inspect_keyed_archive",
           "trace_dylib_resolution"
         ]
@@ -239,6 +240,12 @@
       "name": "Binwalk",
       "version": "3.1.0",
       "capabilities": ["inspect_firmware_regions"]
+    },
+    {
+      "id": "evmole-interface",
+      "name": "REA EVM interface adapter",
+      "version": "evmole@0.9.3",
+      "capabilities": ["inspect_evm_interface"]
     },
     {
       "id": "ghidra",
@@ -598,7 +605,7 @@
     }
   ],
   "cli": {
-    "primary_count": 93,
+    "primary_count": 94,
     "commands": [
       "address-to-file-offset",
       "analyze",
@@ -643,6 +650,7 @@
       "inspect-binary-layout",
       "inspect-dyld-shared-cache",
       "inspect-electron-page",
+      "inspect-evm-interface",
       "inspect-firmware-regions",
       "inspect-keyed-archive",
       "inspect-macho",
@@ -703,15 +711,15 @@
   },
   "runtime_catalog": {
     "counts": {
-      "cli_commands": 93,
-      "mcp_tools": 138,
+      "cli_commands": 94,
+      "mcp_tools": 139,
       "mcp_prompts": 6
     },
     "digests": {
-      "tools_sha256": "f21f2b4f021c8fd0c32215e42b69136c2de3e5089307ce3bd2d26fe2cfe04991",
+      "tools_sha256": "12780c5ce820b8ada1c64b03d37796a265c6e744aba325840d1c76f9f858fe3b",
       "prompts_sha256": "ef2de8814390b340623c32001610aa2709d90bed51537b6e562ab3abf144ab4d",
-      "combined_sha256": "80e94963da9fa55c2dcc7edd1b603c898578d6436063534b1b089a9668781251",
-      "providers_sha256": "94abc97ffbd173fe7d50512cc669cd8091160088a043eaeba33749a39c7b7e26"
+      "combined_sha256": "cb6d8762f5eabc88766164c370fbad45348e0c5ba1b19d8dee019b3b4f6a69c8",
+      "providers_sha256": "a7c9a214b82eeb4f6280014909582a7a3cf03aadf12703950887750e3c951bcc"
     }
   }
 }
