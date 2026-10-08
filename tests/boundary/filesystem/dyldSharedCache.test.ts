@@ -54,6 +54,20 @@ const dylib = (installName: string, dependencies: readonly Uint8Array[] = []) =>
     commands: [dylibCommand(LC.ID_DYLIB, installName), ...dependencies],
   });
 
+it("rejects unmapped images when no unavailable subcache can explain the address", async () => {
+  const fixture = dyldCacheFixture(IMAGES);
+  const main = Buffer.from(fixture.main);
+  main.writeBigUInt64LE(0x700000000n, main.readUInt32LE(0x1c0));
+  const path = await writeCache({ ...fixture, main });
+  expect(await inspectDyldSharedCache({ cache_path: path })).toMatchObject({
+    ok: false,
+    error: {
+      reason: "format",
+      detail: expect.stringContaining("unmapped image address"),
+    },
+  });
+});
+
 const writeCache = async (
   fixture: CacheFixture,
   name = "dyld_shared_cache_arm64e",

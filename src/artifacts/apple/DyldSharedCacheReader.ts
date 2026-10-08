@@ -193,6 +193,32 @@ class CacheFile {
   }
 }
 
+interface CacheRegion {
+  readonly file: CacheFile;
+  readonly address: number;
+  readonly size: number;
+  readonly fileOffset: number;
+}
+
+/** Validated disjoint regions are sorted once; all VM lookups use logarithmic search. */
+const cacheRegionAt = (
+  regions: readonly CacheRegion[],
+  address: number,
+): CacheRegion | undefined => {
+  let low = 0;
+  let high = regions.length;
+  while (low < high) {
+    const middle = Math.floor((low + high) / 2);
+    const region = regions[middle];
+    if (region !== undefined && region.address <= address) low = middle + 1;
+    else high = middle;
+  }
+  const region = regions[low - 1];
+  return region !== undefined && address < region.address + region.size
+    ? region
+    : undefined;
+};
+
 interface ParsedHeader {
   readonly magic: string;
   readonly uuid: string;
@@ -314,12 +340,7 @@ export class DyldSharedCache {
       readonly address: number;
     }[],
     private readonly files: readonly CacheFile[],
-    private readonly regions: readonly {
-      readonly file: CacheFile;
-      readonly address: number;
-      readonly size: number;
-      readonly fileOffset: number;
-    }[],
+    private readonly regions: readonly CacheRegion[],
   ) {
     this.#byPath = new Map(images.map((image) => [image.path, image]));
   }
@@ -418,7 +439,17 @@ export class DyldSharedCache {
             `Dyld cache VM mappings overlap at ${hex(current.address)} between ${previous.file.suffix || "main"} and ${current.file.suffix || "main"}`,
           );
       }
-      return new DyldSharedCache(header, images, files, regions);
+      if (statuses.every(({ status }) => status === "present")) {
+        const unmapped = images.find(
+          ({ address }) => cacheRegionAt(ordered, address) === undefined,
+        );
+        if (unmapped !== undefined)
+          throw new ArtifactReaderFailure(
+            "format",
+            `Complete dyld cache has an unmapped image address ${hex(unmapped.address)}: ${unmapped.path}`,
+          );
+      }
+      return new DyldSharedCache(header, images, files, ordered);
     } catch (cause: unknown) {
       await Promise.allSettled(files.map(({ handle }) => handle.close()));
       throw cause;
@@ -590,10 +621,7 @@ export class DyldSharedCache {
   }
 
   #region(address: number) {
-    return this.regions.find(
-      (region) =>
-        address >= region.address && address < region.address + region.size,
-    );
+    return cacheRegionAt(this.regions, address);
   }
 
   /** Parse one cached image's load commands through the cache's VM mappings. */
