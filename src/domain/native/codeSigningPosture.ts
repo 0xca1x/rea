@@ -45,7 +45,7 @@ export const sealedResourcesSchema = z.object({
 /** Local `codesign --verify --deep --strict` outcome for the signed code. */
 export const signatureVerificationSchema = z.object({
   path: z.string(),
-  status: z.enum(["valid", "invalid", "unsigned"]),
+  status: z.enum(["valid", "invalid", "unsigned", "unknown"]),
   exit_code: z.number().int().nullable(),
   diagnostics: z.array(z.string()),
   validated_nested_code: z.array(z.string()),

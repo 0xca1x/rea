@@ -330,7 +330,27 @@ describe("native signature posture slice-aware cases", () => {
     );
   });
 
-  it("flags permission diagnostics separately from invalid signatures", async () => {
+  it("preserves a trailing carriage return in reported nested paths", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new CarriageReturnPathRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    // The CR is a valid pathname byte, not a line delimiter: it is kept and
+    // the nonexistent path is flagged rather than silently normalized.
+    expect(result.verification?.validated_nested_code).toEqual([
+      `${app}/Contents/Helpers/cr\r`,
+    ]);
+    expect(result.limitations).toContainEqual(
+      expect.stringContaining("which does not exist"),
+    );
+  });
+
+  it("reports verification I/O failures as unknown, not invalid", async () => {
     const { app, executable } = await fixtureApp(undefined);
     const signature = await new NativeMacOSProvider(
       new PermissionDeniedRunner(),
@@ -340,9 +360,11 @@ describe("native signature posture slice-aware cases", () => {
       .execute("inspect_signature", {});
     if (!signature.ok) throw signature.error;
     const result = inspectSignatureSchema.parse(signature.value.result);
-    expect(result.verification?.status).toBe("invalid");
+    expect(result.verification?.status).toBe("unknown");
     expect(result.limitations).toContainEqual(
-      expect.stringContaining("permission or I/O diagnostic"),
+      expect.stringContaining(
+        "operational failure, not a proven broken signature",
+      ),
     );
   });
 });
@@ -454,6 +476,23 @@ class UniversalMixedRunner extends FixtureRunner {
     return ok({
       ...result.value,
       stderr,
+      stderrBytes: Buffer.byteLength(stderr),
+    });
+  }
+}
+
+/** A nested helper whose file name ends in a carriage return. */
+class CarriageReturnPathRunner extends FixtureRunner {
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || arguments_[0] !== "--verify") return result;
+    const bundle = arguments_.at(-1) ?? "";
+    const stderr = `--validated:${bundle}/Contents/Helpers/cr\r\n${bundle}: valid on disk\n`;
+    return ok({
+      ...result.value,
+      stdout: "",
+      stderr,
+      stdoutBytes: 0,
       stderrBytes: Buffer.byteLength(stderr),
     });
   }

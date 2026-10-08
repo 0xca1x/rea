@@ -54,26 +54,43 @@ const bundleDirFromPlist = (plist: string): string | undefined => {
  * `--prepared:`/`--validated:` progress lines arrive in no fixed order; they
  * are reported as a sorted list of validated nested code instead.
  */
+/** Diagnostics showing verification could not read its target. */
+export const verificationIOFailure = (
+  diagnostics: readonly string[],
+): boolean =>
+  diagnostics.some((line) =>
+    /permission denied|operation not permitted|\bEACCES\b|\bEPERM\b/iu.test(
+      line,
+    ),
+  );
+
 export const signatureVerification = (
   capture: NativeCommandCapture,
   path: string,
   unsigned: boolean,
 ): NonNullable<InspectSignature["verification"]> => {
-  // Preserve trailing whitespace: a nested path may end in a space or tab.
-  // Strip only the line delimiter and leading whitespace for record parsing.
+  // Preserve trailing whitespace and carriage returns: a nested path may end
+  // in a space, tab, or CR. codesign delimits records with LF, so split on LF
+  // only and strip leading whitespace for record parsing.
   const lines = `${capture.stderr}\n${capture.stdout}`
-    .split(/\r?\n/u)
-    .map((line) => line.replace(/\r$/u, ""))
+    .split(/\n/u)
     .filter((line) => line.length > 0);
   const record = (line: string): string => line.replace(/^\s+/u, "");
+  const diagnostics = lines.filter(
+    (line) => !/^--(?:prepared|validated):/u.test(record(line)),
+  );
   return {
     path,
     status:
-      capture.exitCode === 0 ? "valid" : unsigned ? "unsigned" : "invalid",
+      capture.exitCode === 0
+        ? "valid"
+        : unsigned
+          ? "unsigned"
+          : verificationIOFailure(diagnostics)
+            ? "unknown"
+            : "invalid",
     exit_code: capture.exitCode,
-    diagnostics: lines.filter(
-      (line) => !/^--(?:prepared|validated):/u.test(record(line)),
-    ),
+    diagnostics,
     validated_nested_code: [
       ...new Set(
         lines.flatMap((line) => {
@@ -156,6 +173,28 @@ export const stapledTicket = async (
           size: null,
           reason: "changed",
         };
+      // An atomic replacement swaps the pathname to a new inode while the
+      // handle still describes the unlinked original: re-resolve the path and
+      // refuse a digest that no longer belongs to the bundle.
+      try {
+        const current = await lstat(path);
+        if (current.dev !== opened.dev || current.ino !== opened.ino)
+          return {
+            status: "unreadable",
+            path: relative,
+            sha256: null,
+            size: null,
+            reason: "changed",
+          };
+      } catch {
+        return {
+          status: "unreadable",
+          path: relative,
+          sha256: null,
+          size: null,
+          reason: "changed",
+        };
+      }
       return {
         status: "present",
         path: relative,
