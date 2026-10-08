@@ -1,5 +1,22 @@
 import { AnalysisError } from "./analysisErrorBase.js";
 
+/** Declared and observed checksums of one consumed member representation. */
+export interface ArtifactChecksumObservation {
+  readonly representation: "stored" | "decoded";
+  readonly algorithm: string;
+  readonly declared: string;
+  readonly observed: string;
+}
+
+/** Evidence identifying an artifact member's failed integrity constraints. */
+export interface ArtifactIntegrityFailureDetails {
+  readonly logicalPath: string;
+  readonly declaredSha256: string | null;
+  readonly calculatedSha256: string | null;
+  readonly unpacked: boolean;
+  readonly checksumMismatches?: readonly ArtifactChecksumObservation[];
+}
+
 /** Artifact inventory or extraction failed a typed safety boundary. */
 export class ArtifactOperationError extends AnalysisError {
   readonly _tag = "ArtifactOperationError";
@@ -25,12 +42,7 @@ export class ArtifactOperationError extends AnalysisError {
       | "path"
       | "unavailable"
       | "io",
-    readonly artifactDetails?: Readonly<{
-      logicalPath: string;
-      declaredSha256: string | null;
-      calculatedSha256: string | null;
-      unpacked: boolean;
-    }>,
+    readonly artifactDetails?: ArtifactIntegrityFailureDetails,
     /** The specific constraint that failed, such as the colliding path. */
     readonly detail?: string,
   ) {

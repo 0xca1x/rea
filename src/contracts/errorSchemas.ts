@@ -53,6 +53,16 @@ export const analysisErrorProjectionSchema = z.discriminatedUnion("code", [
           declared_sha256: z.string().nullable(),
           calculated_sha256: z.string().nullable(),
           unpacked: z.boolean(),
+          checksum_mismatches: z
+            .array(
+              z.strictObject({
+                representation: z.enum(["stored", "decoded"]),
+                algorithm: z.string(),
+                declared: z.string(),
+                observed: z.string(),
+              }),
+            )
+            .optional(),
         })
         .strict(),
     })

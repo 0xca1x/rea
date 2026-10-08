@@ -398,7 +398,29 @@
             "calculated_sha256": {
               "anyOf": [{ "type": "string" }, { "type": "null" }]
             },
-            "unpacked": { "type": "boolean" }
+            "unpacked": { "type": "boolean" },
+            "checksum_mismatches": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "properties": {
+                  "representation": {
+                    "type": "string",
+                    "enum": ["stored", "decoded"]
+                  },
+                  "algorithm": { "type": "string" },
+                  "declared": { "type": "string" },
+                  "observed": { "type": "string" }
+                },
+                "required": [
+                  "representation",
+                  "algorithm",
+                  "declared",
+                  "observed"
+                ],
+                "additionalProperties": false
+              }
+            }
           },
           "required": [
             "logical_path",

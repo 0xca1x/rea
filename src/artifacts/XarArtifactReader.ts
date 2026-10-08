@@ -199,12 +199,12 @@ const memberLimitations = (
   ...(unsupportedChecksum === undefined
     ? []
     : [
-        `Member declares unsupported checksum ${unsupportedChecksum.style}; integrity not verified.`,
+        `Member declares unsupported checksum ${unsupportedChecksum.style} ${unsupportedChecksum.value}; integrity not verified.`,
       ]),
   ...(unsupportedArchived === undefined
     ? []
     : [
-        `Member declares unsupported archived checksum ${unsupportedArchived.style}; stored-byte integrity not verified.`,
+        `Member declares unsupported archived checksum ${unsupportedArchived.style} ${unsupportedArchived.value}; stored-byte integrity not verified.`,
       ]),
   ...(member.data !== undefined &&
   member.data.encoding !== "application/octet-stream" &&
@@ -725,10 +725,7 @@ export class XarArtifactReader implements ArtifactReader {
       data.encoding !== "application/octet-stream" &&
       data.encoding !== "application/x-gzip";
     const classified =
-      member.kind === "file" &&
-      unsupportedChecksum === undefined &&
-      unsupportedArchived === undefined &&
-      !unsupportedEncoding
+      member.kind === "file" && !unsupportedEncoding
         ? await this.#nestedArchive(member)
         : {
             nested: undefined as XarNestedArchive | undefined,
@@ -754,11 +751,7 @@ export class XarArtifactReader implements ArtifactReader {
         classified,
       ),
       adapterKey: member.path,
-      ...(unsupportedEncoding ||
-      unsupportedChecksum !== undefined ||
-      unsupportedArchived !== undefined
-        ? { contentUnavailable: true }
-        : {}),
+      ...(unsupportedEncoding ? { contentUnavailable: true } : {}),
       ...(classified.nested === undefined
         ? {}
         : { nestedArchive: classified.nested }),

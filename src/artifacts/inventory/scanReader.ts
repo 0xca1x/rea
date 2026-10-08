@@ -5,6 +5,7 @@ import {
   ArtifactReaderFailure,
   type ArtifactEntry,
   type ArtifactReader,
+  type ArtifactChecksumObservation,
 } from "../ArtifactReader.js";
 import type { ArtifactNode } from "../../domain/artifactGraph.js";
 import {
@@ -159,6 +160,39 @@ interface DigestedEntry {
   readonly mismatchDetails: readonly string[];
 }
 
+const checksumDescription = ({
+  representation,
+  algorithm,
+  declared,
+  observed,
+}: ArtifactChecksumObservation): string =>
+  `Declared ${representation} ${algorithm} ${declared} disagrees with observed ${observed}.`;
+
+const entryIntegrityFailure = (
+  entry: ArtifactEntry,
+  logicalPath: string,
+  observed: {
+    readonly sha256: string;
+    readonly checksumMismatches: readonly ArtifactChecksumObservation[];
+  },
+): ArtifactReaderFailure => {
+  const mismatchDetails = observed.checksumMismatches.map(checksumDescription);
+  return new ArtifactReaderFailure(
+    "integrity",
+    `Artifact integrity metadata disagrees with content: ${logicalPath}${mismatchDetails.length === 0 ? "" : ` (${mismatchDetails.join(" ")})`}`,
+    undefined,
+    {
+      logicalPath,
+      declaredSha256: entry.declaredSha256,
+      calculatedSha256: observed.sha256,
+      unpacked: entry.unpacked,
+      ...(observed.checksumMismatches.length === 0
+        ? {}
+        : { checksumMismatches: observed.checksumMismatches }),
+    },
+  );
+};
+
 const digestArtifactEntry = async (
   context: ScanContext,
   currentReader: ArtifactReader,
@@ -186,20 +220,24 @@ const digestArtifactEntry = async (
   ).filter(({ declared, observed }) => declared !== observed);
   const mismatched =
     sha256Mismatch || checksumMismatch || storedMismatches.length > 0;
+  const checksumMismatches = [
+    ...(checksumMismatch
+      ? [
+          {
+            representation: "decoded" as const,
+            algorithm: checksum.algorithm,
+            declared: checksum.value,
+            observed: digest.also ?? "unavailable",
+          },
+        ]
+      : []),
+    ...storedMismatches,
+  ];
   if (mismatched && context.integrity.mode === "fail")
-    throw new ArtifactReaderFailure(
-      "integrity",
-      sha256Mismatch || checksum === undefined
-        ? `Artifact integrity metadata disagrees with content: ${logicalPath}`
-        : `Declared ${checksum.algorithm} checksum disagrees with content: ${logicalPath}`,
-      undefined,
-      {
-        logicalPath,
-        declaredSha256: entry.declaredSha256,
-        calculatedSha256: digest.sha256,
-        unpacked: entry.unpacked,
-      },
-    );
+    throw entryIntegrityFailure(entry, logicalPath, {
+      sha256: digest.sha256,
+      checksumMismatches,
+    });
   if (sha256Mismatch && entry.declaredSha256 !== null)
     context.pendingContradictions.push({
       logicalPath,
@@ -227,17 +265,7 @@ const digestArtifactEntry = async (
         : [],
     }),
     mismatched,
-    mismatchDetails: [
-      ...(checksumMismatch
-        ? [
-            `Declared ${checksum.algorithm} ${checksum.value} disagrees with observed ${digest.also ?? "unavailable"}.`,
-          ]
-        : []),
-      ...storedMismatches.map(
-        ({ representation, algorithm, declared, observed }) =>
-          `Declared ${representation} ${algorithm} ${declared} disagrees with observed ${observed}.`,
-      ),
-    ],
+    mismatchDetails: checksumMismatches.map(checksumDescription),
   };
 };
 

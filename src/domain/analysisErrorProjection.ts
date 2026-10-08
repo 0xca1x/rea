@@ -249,6 +249,18 @@ const artifactStateErrorDetails = (
       declared_sha256: error.artifactDetails.declaredSha256,
       calculated_sha256: error.artifactDetails.calculatedSha256,
       unpacked: error.artifactDetails.unpacked,
+      ...(error.artifactDetails.checksumMismatches === undefined
+        ? {}
+        : {
+            checksum_mismatches: error.artifactDetails.checksumMismatches.map(
+              ({ representation, algorithm, declared, observed }) => ({
+                representation,
+                algorithm,
+                declared,
+                observed,
+              }),
+            ),
+          }),
     };
   if (error instanceof ArtifactOperationError)
     return {

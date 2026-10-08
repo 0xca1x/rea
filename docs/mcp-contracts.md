@@ -260,6 +260,12 @@ Artifact integrity fails closed by default. A request can explicitly select
 `integrity_policy=record-and-continue` when the investigation needs verified
 siblings to continue after a mismatch.
 
+Strict member failures include `details.checksum_mismatches` for conflicting
+stored or decoded checksums, preserving each algorithm and declared/observed
+value. An unsupported checksum algorithm leaves that verification facet unknown;
+readable member bytes are still hashed and can be extracted, with the declared
+algorithm and value retained in limitations.
+
 Contradictory bytes are quarantined from nested expansion and recorded with
 declared and observed hashes, trust, provenance, path, and unpacked state.
 Verified siblings continue. Comparisons classify the result as a contradiction

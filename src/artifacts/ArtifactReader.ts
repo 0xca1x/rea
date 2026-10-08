@@ -2,6 +2,11 @@ import type { Readable } from "node:stream";
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
 import type { ZipPackageFormat } from "../domain/zipPackageFormat.js";
 import type { ArtifactDecodedBudget } from "./ArtifactDecodedBudget.js";
+import type {
+  ArtifactChecksumObservation,
+  ArtifactIntegrityFailureDetails,
+} from "../domain/artifactOperationError.js";
+export type { ArtifactChecksumObservation } from "../domain/artifactOperationError.js";
 
 /** Archive-neutral entry metadata. Reader adapters never choose output paths. */
 export interface ArtifactEntry {
@@ -38,14 +43,6 @@ export interface ArtifactEntry {
   };
 }
 
-/** Checksum evidence for a member representation the scanner cannot hash itself. */
-export interface ArtifactChecksumObservation {
-  readonly representation: "stored" | "decoded";
-  readonly algorithm: string;
-  readonly declared: string;
-  readonly observed: string;
-}
-
 /** Read-only adapter over one directory, archive, or virtual container. */
 export interface ArtifactReader {
   readonly format: "directory" | ZipPackageFormat | "asar" | "pkg" | "file";
@@ -74,12 +71,7 @@ export class ArtifactReaderFailure extends Error {
       | "unavailable",
     message: string,
     options?: ErrorOptions,
-    readonly details?: Readonly<{
-      logicalPath: string;
-      declaredSha256: string | null;
-      calculatedSha256: string | null;
-      unpacked: boolean;
-    }>,
+    readonly details?: ArtifactIntegrityFailureDetails,
   ) {
     super(message, options);
     this.name = "ArtifactReaderFailure";
