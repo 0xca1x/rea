@@ -73,6 +73,15 @@ class ByteSource {
     return bytes;
   }
 
+  /** Consume the NUL alignment bytes required by newc and crc records. */
+  async padding(length: number, label: string): Promise<void> {
+    if ((await this.read(length, label)).some((byte) => byte !== 0))
+      throw new ArtifactReaderFailure(
+        "format",
+        `cpio ${label} contains nonzero bytes`,
+      );
+  }
+
   /** Yield `length` bytes in chunks without buffering them together. */
   async *take(length: number, label: string): AsyncGenerator<Buffer> {
     let remaining = length;
@@ -325,11 +334,9 @@ export class CpioArtifactReader implements ArtifactReader {
           "cpio member name size is invalid",
         );
       const nameBytes = await source.read(header.nameSize, "member name");
-      await drain(
-        source.take(
-          padding(header.format, 110 + header.nameSize),
-          "name padding",
-        ),
+      await source.padding(
+        padding(header.format, 110 + header.nameSize),
+        "name padding",
       );
       // cpio names require exactly one terminal NUL: a missing terminator or
       // an embedded NUL with trailing bytes is malformed. Decode without
@@ -637,8 +644,9 @@ export class CpioArtifactReader implements ArtifactReader {
         for (const byte of chunk) sum.value = (sum.value + byte) >>> 0;
       yield chunk;
     }
-    await drain(
-      source.take(padding(header.format, header.fileSize), "data padding"),
+    await source.padding(
+      padding(header.format, header.fileSize),
+      "data padding",
     );
     this.#cancelled();
   }

@@ -2,6 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { buffer } from "node:stream/consumers";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 import { describe, expect, it } from "vitest";
 
@@ -411,3 +412,33 @@ describe("cpio hard links and CRC archives", () => {
     await reader.close();
   });
 });
+
+it.each(["newc", "crc"] as const)(
+  "rejects nonzero %s alignment under either integrity policy",
+  async (format) => {
+    for (const policy of ["fail", "record-and-continue"] as const) {
+      for (const [offset, label] of [
+        [113, "name padding"],
+        [117, "data padding"],
+      ] as const) {
+        // 110-byte header, a three-byte NUL-terminated name, then one data byte.
+        const decoded = gunzipSync(
+          gzipCpio([{ name: "ab", mode: MODE.file, data: "x" }], format),
+        );
+        decoded[offset] = 1;
+        const reader = new CpioArtifactReader(
+          () => Promise.resolve(Readable.from([gzipSync(decoded)])),
+          policy,
+        );
+        try {
+          await expect(collect(reader)).rejects.toMatchObject({
+            reason: "format",
+            message: `cpio ${label} contains nonzero bytes`,
+          });
+        } finally {
+          await reader.close();
+        }
+      }
+    }
+  },
+);
