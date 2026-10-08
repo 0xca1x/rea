@@ -20,7 +20,10 @@ import {
 } from "./CommandRunner.js";
 import { NATIVE_MACOS_PROVIDER_IDENTITY } from "./NativeMacOSProviderMetadata.js";
 import type { NativeObservation } from "./NativeObservation.js";
-import { signatureVerification } from "./CodesignVerification.js";
+import {
+  signatureVerification,
+  codesignOperationalFailure,
+} from "./CodesignVerification.js";
 import { parseCodeSignature } from "./parsers/codesign.js";
 import { parseSignatureEntitlements } from "./NativeSignatureEntitlements.js";
 import {
@@ -152,6 +155,10 @@ export const inspectNativeSignature = async (options: {
   if (verification.status === "unknown")
     limitations.push(
       "Signature verification is inconclusive (permission, I/O or unrecognized diagnostic); this is not a proven broken signature.",
+    );
+  else if (codesignOperationalFailure(verified.value, code))
+    limitations.push(
+      "Some code could not be verified due to operational diagnostics; definitive signature failures elsewhere still prove invalidity.",
     );
   let mainInvalid =
     verification.status === "invalid" || verification.status === "unknown";

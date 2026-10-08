@@ -64,3 +64,23 @@ it("excludes complete selected paths with embedded newlines before classifying r
   expect(result.status).toBe("invalid");
   expect(result.diagnostics.join("\n")).toContain(path);
 });
+
+it("preserves definitive invalidity when other components have operational failures", async () => {
+  const path = "/Applications/Fixture.app";
+  const capture = await new NativeFixtureRunner().run("codesign", [
+    "--verify",
+    path,
+  ]);
+  if (!capture.ok) throw capture.error;
+  const observed = signatureVerification(
+    {
+      ...capture.value,
+      exitCode: 1,
+      stderr: `${path}/Contents/Helpers/one: permission denied\n${path}/Contents/Helpers/two: invalid signature\n`,
+    },
+    path,
+    false,
+  );
+  expect(observed.status).toBe("invalid");
+  expect(observed.diagnostics).toHaveLength(2);
+});
