@@ -7,10 +7,10 @@
       "client": "2.3.1",
       "core": "2.3.1"
     },
-    "skill_version": "31"
+    "skill_version": "32"
   },
   "tools": {
-    "total": 137,
+    "total": 138,
     "families": [
       {
         "id": "direct",
@@ -84,10 +84,11 @@
       {
         "id": "native",
         "surface": "native-provider",
-        "count": 8,
+        "count": 9,
         "tools": [
           "capture_native_ui_scenario",
           "demangle_swift",
+          "inspect_binary_layout",
           "inspect_macho",
           "inspect_plist",
           "inspect_signature",
@@ -375,6 +376,12 @@
       ]
     },
     {
+      "id": "pwntools-elf",
+      "name": "REA pwntools ELF adapter",
+      "version": "pwntools@4.15.0;pyelftools@0.33;unicorn@2.1.2",
+      "capabilities": ["inspect_binary_layout"]
+    },
+    {
       "id": "rea-android-application",
       "name": "REA Android application workflows",
       "version": "1",
@@ -591,7 +598,7 @@
     }
   ],
   "cli": {
-    "primary_count": 92,
+    "primary_count": 93,
     "commands": [
       "address-to-file-offset",
       "analyze",
@@ -633,6 +640,7 @@
       "inspect-android-package",
       "inspect-artifact",
       "inspect-asset-catalog",
+      "inspect-binary-layout",
       "inspect-dyld-shared-cache",
       "inspect-electron-page",
       "inspect-firmware-regions",
@@ -695,15 +703,15 @@
   },
   "runtime_catalog": {
     "counts": {
-      "cli_commands": 92,
-      "mcp_tools": 137,
+      "cli_commands": 93,
+      "mcp_tools": 138,
       "mcp_prompts": 6
     },
     "digests": {
-      "tools_sha256": "86f7f92b32f450a9f9a8f84c59aea4c7dc6dd79b646ef03147c264beae290087",
+      "tools_sha256": "f21f2b4f021c8fd0c32215e42b69136c2de3e5089307ce3bd2d26fe2cfe04991",
       "prompts_sha256": "ef2de8814390b340623c32001610aa2709d90bed51537b6e562ab3abf144ab4d",
-      "combined_sha256": "bca02d5ad49178c80b76c9a824656c3647cffb1d2089f44331e0252bedd4ddbd",
-      "providers_sha256": "8b8126bcdd6a1c6679f42d6e8abf09743552a35add0c70d185887c8bc1962783"
+      "combined_sha256": "80e94963da9fa55c2dcc7edd1b603c898578d6436063534b1b089a9668781251",
+      "providers_sha256": "94abc97ffbd173fe7d50512cc669cd8091160088a043eaeba33749a39c7b7e26"
     }
   }
 }
