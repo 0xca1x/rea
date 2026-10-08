@@ -45,9 +45,12 @@ export const visitArtifactTree = async (
         continue;
       }
       const entry = next.value;
-      const path = normalizeArtifactPath(
-        frame.prefix === "" ? entry.path : `${frame.prefix}/${entry.path}`,
-      );
+      // Charge the full retained namespace, including all enclosing prefixes,
+      // independently from each reader's own raw metadata/index charge.
+      const combined =
+        frame.prefix === "" ? entry.path : `${frame.prefix}/${entry.path}`;
+      root.decodedBudget?.consumeEntry(combined);
+      const path = normalizeArtifactPath(combined);
       const cpio = entry.nestedArchive === "gzip-cpio";
       const asar =
         options.expandAsar !== false &&

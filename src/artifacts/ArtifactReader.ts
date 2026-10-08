@@ -27,6 +27,8 @@ export interface ArtifactEntry {
   };
   /** The container records this member but does not hold its bytes, such as an unresolved hard link. */
   readonly contentUnavailable?: boolean;
+  /** A consumed representation contradicted its declared integrity metadata. */
+  readonly integrityMismatched?: boolean;
   /** Archive format of this member's own bytes, when the scan should expand it. */
   readonly nestedArchive?: "gzip-cpio";
   /** Filesystem identity captured during traversal, when supplied by an adapter. */

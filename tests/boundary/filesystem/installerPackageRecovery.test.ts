@@ -126,3 +126,39 @@ it("records stored-checksum contradictions without losing decoded content identi
     reason: "integrity",
   });
 });
+
+it("preserves recovered directory CRC mismatches through graph materialization", async () => {
+  const directory = await createTestTempDirectory("rea-pkg-directory-crc-");
+  const path = join(directory, "Installer.pkg");
+  await writeFile(
+    path,
+    xarArchive([
+      {
+        name: "Payload",
+        data: gzipCpio(
+          [
+            { name: "dir", mode: MODE.directory, check: 1 },
+            { name: "dir/good", mode: MODE.file, data: "ok" },
+          ],
+          "crc",
+        ),
+      },
+    ]),
+  );
+  const inventory = await scanArtifactInventory(path, {
+    integrity: { mode: "record-and-continue" },
+  });
+  expect(
+    inventory.occurrences.find(
+      ({ logical_path }) => logical_path === "Payload/dir",
+    ),
+  ).toMatchObject({
+    hash_status: "mismatched",
+    limitations: ["cpio CRC disagrees with content: dir"],
+  });
+  expect(
+    inventory.occurrences.find(
+      ({ logical_path }) => logical_path === "Payload/dir/good",
+    ),
+  ).toMatchObject({ hash_status: "verified" });
+});

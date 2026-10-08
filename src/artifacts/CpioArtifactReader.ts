@@ -191,6 +191,7 @@ const entryOf = (member: {
   readonly limitations: readonly string[];
   readonly size?: number | null;
   readonly contentUnavailable?: boolean;
+  readonly integrityMismatched?: boolean;
 }): ArtifactEntry => ({
   path: member.path,
   kind: member.kind,
@@ -209,6 +210,7 @@ const entryOf = (member: {
   limitations: member.limitations,
   adapterKey: member.key,
   ...(member.contentUnavailable === true ? { contentUnavailable: true } : {}),
+  ...(member.integrityMismatched === true ? { integrityMismatched: true } : {}),
 });
 
 interface PendingLink {
@@ -373,6 +375,7 @@ export class CpioArtifactReader implements ArtifactReader {
           key,
           header,
           limitations: "mismatch" in verified ? [verified.mismatch] : [],
+          integrityMismatched: "mismatch" in verified,
         });
       return;
     }

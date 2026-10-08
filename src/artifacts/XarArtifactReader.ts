@@ -231,6 +231,11 @@ const collectMembers = (
     const type = textOf(next.element, "type")?.trim();
     const mode = xarMode(textOf(next.element, "mode"));
     const { kind, unsupportedType } = classifyMemberType(type);
+    if (kind !== "file" && childElement(next.element, "data") !== undefined)
+      throw new ArtifactReaderFailure(
+        "format",
+        `xar non-file member declares data: ${path}`,
+      );
     members.push({
       path,
       kind,
@@ -239,11 +244,11 @@ const collectMembers = (
       data: parseData(next.element),
       link: kind === "symlink" ? textOf(next.element, "link") : undefined,
     });
-    pending.push(
-      ...childElements(next.element, "file")
-        .map((element) => ({ element, parent: path }))
-        .reverse(),
-    );
+    const children = childElements(next.element, "file");
+    for (let index = children.length - 1; index >= 0; index--) {
+      const element = children[index];
+      if (element !== undefined) pending.push({ element, parent: path });
+    }
   }
   return members;
 };

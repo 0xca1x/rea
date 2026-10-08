@@ -15,6 +15,7 @@ import {
   type XarFixtureMember,
 } from "./InstallerPackage.fixture.js";
 import { XarArtifactReader } from "./XarArtifactReader.js";
+import { visitArtifactTree } from "./ArtifactTraversal.js";
 
 const withReader = async (
   bytes: Uint8Array,
@@ -401,4 +402,51 @@ it("recovers directory CRC contradictions before yielding and reaches regular si
   } finally {
     await reader.close();
   }
+});
+
+it.each(["directory", "symlink"])(
+  "rejects data declarations attached to non-file type %s",
+  async (type) => {
+    const bytes = rewriteXarToc(
+      xarArchive([{ name: "a", data: Buffer.from("data") }]),
+      (xml) => xml.replace("<type>file</type>", `<type>${type}</type>`),
+    );
+    await withReader(bytes, async (reader) => {
+      await expect(
+        (async () => {
+          for await (const entry of reader.entries()) void entry;
+        })(),
+      ).rejects.toMatchObject({
+        reason: "format",
+        message: "xar non-file member declares data: a",
+      });
+    });
+  },
+);
+
+it("charges long enclosing prefixes for every retained nested entry", async () => {
+  const files = Array.from({ length: 100 }, (_, index) => ({
+    name: `empty-${index}`,
+    mode: MODE.file,
+  }));
+  let member: XarFixtureMember = { name: "Payload", data: gzipCpio(files) };
+  for (let index = 0; index < 18; index++)
+    member = { name: "d".repeat(200), type: "directory", children: [member] };
+  await withReader(
+    xarArchive([member]),
+    async (reader) => {
+      let retained = 0;
+      await expect(
+        visitArtifactTree(reader, async ({ container }) => {
+          if (!container) retained++;
+          return container;
+        }),
+      ).rejects.toMatchObject({
+        reason: "limit",
+        message: expect.stringContaining("Retained archive metadata budget"),
+      });
+      expect(retained).toBeLessThan(files.length + 18);
+    },
+    new ArtifactDecodedBudget(1024 * 1024, 512 * 1024),
+  );
 });
