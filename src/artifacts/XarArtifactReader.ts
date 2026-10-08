@@ -14,6 +14,7 @@ import type { ArtifactCommand } from "../domain/artifactGraph.js";
 import {
   ArtifactReaderFailure,
   type ArtifactEntry,
+  type ArtifactChecksumObservation,
   type ArtifactReader,
 } from "./ArtifactReader.js";
 
@@ -177,6 +178,13 @@ const memberLimitations = (
     : [
         `Member declares unsupported archived checksum ${unsupportedArchived.style}; stored-byte integrity not verified.`,
       ]),
+  ...(member.data !== undefined &&
+  member.data.encoding !== "application/octet-stream" &&
+  member.data.encoding !== "application/x-gzip"
+    ? [
+        `Unsupported xar encoding ${member.data.encoding}; content is unavailable and was not expanded.`,
+      ]
+    : []),
   ...classified.limitations,
 ];
 
@@ -311,6 +319,9 @@ class ChecksumVerifier extends Transform {
       readonly algorithm: string;
       readonly value: string;
     },
+    private readonly record?: (
+      observation: ArtifactChecksumObservation,
+    ) => void,
   ) {
     super();
     this.#hash = createHash(expected.algorithm);
@@ -327,6 +338,16 @@ class ChecksumVerifier extends Transform {
 
   override _flush(done: TransformCallback): void {
     const observed = this.#hash.digest("hex");
+    if (this.record !== undefined) {
+      this.record({
+        representation: "stored",
+        algorithm: this.expected.algorithm,
+        declared: this.expected.value,
+        observed,
+      });
+      done();
+      return;
+    }
     done(
       observed === this.expected.value
         ? null
@@ -352,6 +373,7 @@ export class XarArtifactReader implements ArtifactReader {
   #handle: FileHandle | undefined;
   #heap = 0;
   #members: readonly XarMember[] = [];
+  readonly #integrity = new Map<string, ArtifactChecksumObservation[]>();
 
   readonly #verifyChecksums: boolean;
 
@@ -359,8 +381,8 @@ export class XarArtifactReader implements ArtifactReader {
    * @param options.verifyChecksums Fail `open()` streams whose bytes disagree
    * with the member's extracted checksum (default). Inventory passes false and
    * verifies the declared checksum itself under the caller's integrity policy.
-   * Archived checksums are always verified: the scanner only observes decoded
-   * bytes, so it cannot apply its policy to the stored stream.
+   * Archived checksums are always computed. When inventory owns the policy,
+   * integrityObservations exposes their declared/observed values after reading.
    */
   constructor(
     private readonly path: string,
@@ -404,6 +426,11 @@ export class XarArtifactReader implements ArtifactReader {
       const inflated = inflateSync(compressed, {
         maxOutputLength: MAX_TOC_BYTES,
       });
+      if (BigInt(inflated.length) !== tocSize)
+        throw new ArtifactReaderFailure(
+          "format",
+          `xar TOC decoded ${inflated.length} bytes, expected ${tocSize}`,
+        );
       try {
         xml = new TextDecoder("utf-8", { fatal: true }).decode(inflated);
       } catch (cause: unknown) {
@@ -593,10 +620,15 @@ export class XarArtifactReader implements ArtifactReader {
     assertRawSize(member, data);
     const unsupportedChecksum = data?.unsupportedChecksum;
     const unsupportedArchived = data?.unsupportedArchivedChecksum;
+    const unsupportedEncoding =
+      data !== undefined &&
+      data.encoding !== "application/octet-stream" &&
+      data.encoding !== "application/x-gzip";
     const classified =
       member.kind === "file" &&
       unsupportedChecksum === undefined &&
-      unsupportedArchived === undefined
+      unsupportedArchived === undefined &&
+      !unsupportedEncoding
         ? await this.#nestedArchive(member)
         : {
             nested: undefined as XarNestedArchive | undefined,
@@ -622,6 +654,11 @@ export class XarArtifactReader implements ArtifactReader {
         classified,
       ),
       adapterKey: member.path,
+      ...(unsupportedEncoding ||
+      unsupportedChecksum !== undefined ||
+      unsupportedArchived !== undefined
+        ? { contentUnavailable: true }
+        : {}),
       ...(classified.nested === undefined
         ? {}
         : { nestedArchive: classified.nested }),
@@ -630,6 +667,7 @@ export class XarArtifactReader implements ArtifactReader {
 
   async open(entry: ArtifactEntry, signal?: AbortSignal): Promise<Readable> {
     cancelled(signal);
+    this.#integrity.delete(entry.adapterKey);
     await this.#load(signal);
     const member = this.#members.find(({ path }) => path === entry.adapterKey);
     if (member === undefined || member.kind !== "file")
@@ -675,8 +713,19 @@ export class XarArtifactReader implements ArtifactReader {
     const archivedVerifier =
       archived === undefined
         ? undefined
-        : new ChecksumVerifier(`${entry.path} (archived)`, archived);
+        : new ChecksumVerifier(
+            `${entry.path} (archived)`,
+            archived,
+            this.#verifyChecksums
+              ? undefined
+              : (observation) => {
+                  this.#integrity.set(entry.adapterKey, [observation]);
+                },
+          );
     const raw = Readable.from(this.#chunks(data.offset, data.length, signal));
+    raw.on("error", (cause: unknown) =>
+      archivedVerifier?.destroy(memberFailure(entry.path, cause)),
+    );
     const archivedChecked =
       archivedVerifier === undefined ? raw : raw.pipe(archivedVerifier);
     let decoded: Readable;
@@ -737,6 +786,13 @@ export class XarArtifactReader implements ArtifactReader {
 
   provenance(): readonly ArtifactCommand[] {
     return [];
+  }
+
+  /** Stored-byte checksums computed while consuming the member stream. */
+  integrityObservations(
+    entry: ArtifactEntry,
+  ): readonly ArtifactChecksumObservation[] {
+    return this.#integrity.get(entry.adapterKey) ?? [];
   }
 
   async close(): Promise<void> {

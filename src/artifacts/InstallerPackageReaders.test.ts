@@ -146,7 +146,10 @@ describe("xar installer package reader", () => {
     );
     const [entry] = await collect(bzip);
     if (entry === undefined) throw new Error("missing entry");
-    await expect(bzip.open(entry)).rejects.toMatchObject({ reason: "format" });
+    expect(entry.contentUnavailable).toBe(true);
+    await expect(bzip.open(entry)).rejects.toMatchObject({
+      reason: "unavailable",
+    });
     await bzip.close();
     const notXar = new XarArtifactReader(
       await writePackage(Buffer.from("not an archive at all")),

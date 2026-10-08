@@ -11,6 +11,8 @@ export interface XarFixtureMember {
   readonly mode?: string;
   /** Replace the declared extracted checksum, to model tampering. */
   readonly extractedSha1?: string;
+  /** Replace the declared stored checksum while retaining decodable content. */
+  readonly archivedSha1?: string;
   /** Store these bytes instead of encoding `data`, to model corrupt members. */
   readonly archived?: Uint8Array;
   readonly children?: readonly XarFixtureMember[];
@@ -29,6 +31,8 @@ export const xarArchive = (
     readonly corruptTocChecksum?: boolean;
     /** Declared TOC checksum size; the real digest is 20 bytes. */
     readonly tocChecksumSize?: number;
+    /** Override the fixed-header decoded length without altering the TOC. */
+    readonly tocDecodedSize?: number;
   } = {},
 ): Uint8Array => {
   const heap: Uint8Array[] = [new Uint8Array(20)];
@@ -51,7 +55,7 @@ export const xarArchive = (
           : member.encoding === "bzip2"
             ? "application/x-bzip2"
             : "application/octet-stream";
-      data = `<data><archived-checksum style="sha1">${sha1(archived)}</archived-checksum><extracted-checksum style="sha1">${member.extractedSha1 ?? sha1(member.data)}</extracted-checksum><encoding style="${style}"/><size>${member.data.length}</size><offset>${offset}</offset><length>${archived.length}</length></data>`;
+      data = `<data><archived-checksum style="sha1">${member.archivedSha1 ?? sha1(archived)}</archived-checksum><extracted-checksum style="sha1">${member.extractedSha1 ?? sha1(member.data)}</extracted-checksum><encoding style="${style}"/><size>${member.data.length}</size><offset>${offset}</offset><length>${archived.length}</length></data>`;
     }
     const link =
       type === "symlink"
@@ -74,7 +78,7 @@ export const xarArchive = (
   header.writeUInt16BE(28, 4);
   header.writeUInt16BE(1, 6);
   header.writeBigUInt64BE(BigInt(compressed.length), 8);
-  header.writeBigUInt64BE(BigInt(toc.length), 16);
+  header.writeBigUInt64BE(BigInt(options.tocDecodedSize ?? toc.length), 16);
   header.writeUInt32BE(1, 24);
   return Buffer.concat([header, compressed, ...heap]);
 };

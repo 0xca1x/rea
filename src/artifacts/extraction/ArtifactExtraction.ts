@@ -46,6 +46,7 @@ export const extractArtifact = async (
   const selectedOccurrences = snapshot.occurrences.filter(
     (occurrence) =>
       (occurrence.entry_kind === "file" || occurrence.entry_kind === "slice") &&
+      occurrence.hash_status !== "unavailable" &&
       occurrence.logical_path !== ".",
   );
   const selectedIds = new Set(
@@ -65,6 +66,9 @@ export const extractArtifact = async (
     manifest: snapshot.manifest,
     occurrences,
     nodes,
+    unavailablePaths: snapshot.occurrences
+      .filter(({ hash_status }) => hash_status === "unavailable")
+      .map(({ logical_path }) => logical_path),
   };
   const selected = selectedOccurrences.map((occurrence) => {
     if (
@@ -181,6 +185,11 @@ const materializeSelection = async ({
       }
       const selectedItem = byPath.get(path);
       if (selectedItem === undefined) {
+        if (
+          entry.contentUnavailable === true &&
+          inventory.unavailablePaths.includes(path)
+        )
+          continue;
         if (entry.kind === "file" || entry.kind === "slice")
           throw new ArtifactReaderFailure(
             "integrity",
@@ -263,7 +272,11 @@ const createExtractionResult = (
     cleanup: { attempted: false, verified: true, residual_paths: [] },
     provenance: [],
     limitations: [
-      "All regular files in the active artifact were materialized, including members of expanded PKG Payload/Scripts archives.",
+      "All available selected regular files were materialized; expanded PKG Payload/Scripts archives are represented by their extracted children.",
+      ...inventory.unavailablePaths.map(
+        (path) =>
+          `Unavailable member ${path} was not extracted; see its inventory occurrence for the reason.`,
+      ),
     ],
   });
 };
@@ -272,6 +285,7 @@ interface LoadedInventory {
   readonly manifest: ArtifactGraphManifest;
   readonly occurrences: ReadonlyMap<string, ArtifactOccurrence>;
   readonly nodes: ReadonlyMap<string, ArtifactNode>;
+  readonly unavailablePaths: readonly string[];
 }
 
 const collectOccurrences = (

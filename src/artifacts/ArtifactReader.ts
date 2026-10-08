@@ -35,11 +35,23 @@ export interface ArtifactEntry {
   };
 }
 
+/** Checksum evidence for a member representation the scanner cannot hash itself. */
+export interface ArtifactChecksumObservation {
+  readonly representation: "stored";
+  readonly algorithm: string;
+  readonly declared: string;
+  readonly observed: string;
+}
+
 /** Read-only adapter over one directory, archive, or virtual container. */
 export interface ArtifactReader {
   readonly format: "directory" | ZipPackageFormat | "asar" | "pkg" | "file";
   entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry>;
   open(entry: ArtifactEntry, signal?: AbortSignal): Promise<Readable>;
+  /** Checksums observed after the complete member stream has been consumed. */
+  integrityObservations?(
+    entry: ArtifactEntry,
+  ): readonly ArtifactChecksumObservation[];
   provenance(): readonly ArtifactCommand[];
   close(): Promise<void>;
 }

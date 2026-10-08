@@ -235,7 +235,11 @@ const digestArtifactEntry = async (
     entry.declaredSha256 !== null && entry.declaredSha256 !== digest.sha256;
   const checksumMismatch =
     checksum !== undefined && checksum.value !== digest.also;
-  const mismatched = sha256Mismatch || checksumMismatch;
+  const storedMismatches = (
+    currentReader.integrityObservations?.(entry) ?? []
+  ).filter(({ declared, observed }) => declared !== observed);
+  const mismatched =
+    sha256Mismatch || checksumMismatch || storedMismatches.length > 0;
   if (mismatched && context.integrity.mode === "fail")
     throw new ArtifactReaderFailure(
       "integrity",
@@ -277,11 +281,17 @@ const digestArtifactEntry = async (
         : [],
     }),
     mismatched,
-    mismatchDetails: checksumMismatch
-      ? [
-          `Declared ${checksum.algorithm} ${checksum.value} disagrees with observed ${digest.also ?? "unavailable"}.`,
-        ]
-      : [],
+    mismatchDetails: [
+      ...(checksumMismatch
+        ? [
+            `Declared ${checksum.algorithm} ${checksum.value} disagrees with observed ${digest.also ?? "unavailable"}.`,
+          ]
+        : []),
+      ...storedMismatches.map(
+        ({ algorithm, declared, observed }) =>
+          `Declared stored ${algorithm} ${declared} disagrees with observed ${observed}.`,
+      ),
+    ],
   };
 };
 
