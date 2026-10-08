@@ -224,4 +224,41 @@ describe("installer package CRC recovery", () => {
       ),
     ).toMatchObject({ hash_status: "verified" });
   });
+
+  it("keeps later siblings after a zero-size hard-link CRC mismatch", async () => {
+    const directory = await createTestTempDirectory("rea-pkg-link-crc-");
+    const path = join(directory, "Installer.pkg");
+    await writeFile(
+      path,
+      xarArchive([
+        {
+          name: "Payload",
+          data: gzipCpio(
+            [
+              { name: "./bad", mode: MODE.file, ino: 4, links: 2, check: 1 },
+              { name: "./good", mode: MODE.file, data: "ok" },
+            ],
+            "crc",
+          ),
+        },
+      ]),
+    );
+    const inventory = artifactInventoryResultSchema.parse(
+      parseEvidence(
+        await runProviderAnalysis(path, "inventory_artifact", {
+          integrity_policy: "record-and-continue",
+        }),
+      ).normalized_result,
+    );
+    expect(
+      inventory.occurrences.find(
+        ({ logical_path: logical }) => logical === "Payload/bad",
+      ),
+    ).toMatchObject({ hash_status: "unavailable" });
+    expect(
+      inventory.occurrences.find(
+        ({ logical_path: logical }) => logical === "Payload/good",
+      ),
+    ).toMatchObject({ hash_status: "verified" });
+  });
 });

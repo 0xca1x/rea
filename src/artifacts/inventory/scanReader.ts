@@ -179,7 +179,10 @@ const visitArtifactEntries = async (
         const parent = frame.reader;
         const nested: ArtifactReader =
           entry.nestedArchive === "gzip-cpio"
-            ? new CpioArtifactReader((signal) => parent.open(entry, signal))
+            ? new CpioArtifactReader(
+                (signal) => parent.open(entry, signal),
+                context.integrity.mode,
+              )
             : new AsarArtifactReader(entry.adapterKey);
         // Only traversed containers can own members, not opaque archive-named files.
         context.expandedContainerIds.add(occurrence.occurrence_id);

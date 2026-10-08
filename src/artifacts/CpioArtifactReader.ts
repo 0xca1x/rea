@@ -255,6 +255,13 @@ export class CpioArtifactReader implements ArtifactReader {
     private readonly openCompressed: (
       signal?: AbortSignal,
     ) => Promise<Readable>,
+    /**
+     * Integrity mode for iteration-time CRC failures. Streamed data CRCs are
+     * always checked; under record-and-continue a zero-size hard-link header
+     * whose CRC disagrees is yielded as an unavailable occurrence so later
+     * siblings are still inventoried, instead of aborting the archive.
+     */
+    private readonly integrity: "fail" | "record-and-continue" = "fail",
   ) {}
 
   async *entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry> {
@@ -384,11 +391,25 @@ export class CpioArtifactReader implements ArtifactReader {
       header.fileSize === 0
     ) {
       // Zero-size headers carry no bytes, so a CRC archive must declare zero.
-      if (header.format === "crc" && header.check !== 0)
-        throw new ArtifactReaderFailure(
-          "integrity",
-          `cpio CRC disagrees with content: ${raw}`,
-        );
+      // Under record-and-continue this is the occurrence's own forgotten
+      // bytes: yield it unavailable so later siblings still inventory.
+      if (header.format === "crc" && header.check !== 0) {
+        if (this.integrity !== "record-and-continue")
+          throw new ArtifactReaderFailure(
+            "integrity",
+            `cpio CRC disagrees with content: ${raw}`,
+          );
+        yield entryOf({
+          path,
+          kind: "file",
+          key,
+          header,
+          size: null,
+          limitations: [`cpio CRC disagrees with content: ${raw}`],
+          contentUnavailable: true,
+        });
+        return;
+      }
       const stored = this.#links.get(header.identity);
       if (stored !== undefined) {
         yield this.#alias(path, key, header, stored);

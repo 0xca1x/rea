@@ -336,6 +336,8 @@ export class XarArtifactReader implements ArtifactReader {
    * @param options.verifyChecksums Fail `open()` streams whose bytes disagree
    * with the member's extracted checksum (default). Inventory passes false and
    * verifies the declared checksum itself under the caller's integrity policy.
+   * Archived checksums are always verified: the scanner only observes decoded
+   * bytes, so it cannot apply its policy to the stored stream.
    */
   constructor(
     private readonly path: string,
@@ -618,9 +620,12 @@ export class XarArtifactReader implements ArtifactReader {
         "format",
         `xar member ${entry.path} uses unsupported encoding ${data.encoding}`,
       );
+    // Archived checksums cover the stored stream, which inventory's scanner
+    // never observes: it hashes decoded bytes. Always verify them here; the
+    // scanner's per-entry recovery still honors record-and-continue.
     const archived = data.archivedChecksum;
     const archivedVerifier =
-      archived === undefined || !this.#verifyChecksums
+      archived === undefined
         ? undefined
         : new ChecksumVerifier(`${entry.path} (archived)`, archived);
     const raw = Readable.from(this.#chunks(data.offset, data.length, signal));
