@@ -241,7 +241,7 @@ const createExtractionResult = (
     provenance: [],
     integrity_contradictions: inventory.integrityContradictions,
     limitations: [
-      "All regular files in the active artifact were materialized; nested archive contents remain represented by their containing file.",
+      "All regular files in the active artifact were materialized. The artifacts list identifies written files; nested inventory observations may refer to additional logical paths.",
       ...(writtenContradictions.length === 0
         ? []
         : [
