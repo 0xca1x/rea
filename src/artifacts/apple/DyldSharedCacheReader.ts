@@ -216,6 +216,32 @@ const version = (value: number): string | null =>
     ? null
     : `${value >>> 16}.${(value >>> 8) & 0xff}.${value & 0xff}`;
 
+/**
+ * Decode `cacheType` according to header generation. Modern headers
+ * (those carrying `cacheSubType`) use `0 = development`, `1 = production`;
+ * older single-file headers use the historical `1 = development`,
+ * `0 = optimized` polarity.
+ */
+const decodeCacheType = (
+  cacheType: number | null,
+  modern: boolean,
+): DyldSharedCacheHeader["cache_type"] => {
+  if (cacheType === null) return null;
+  if (modern)
+    return cacheType === 0
+      ? "development"
+      : cacheType === 1
+        ? "production"
+        : cacheType === 2
+          ? "multi-cache"
+          : null;
+  return cacheType === 1
+    ? "development"
+    : cacheType === 0
+      ? "production"
+      : null;
+};
+
 /** A main dyld shared cache file and the subcaches it names. */
 export class DyldSharedCache {
   readonly #byPath: ReadonlyMap<
@@ -404,14 +430,10 @@ export class DyldSharedCache {
           ? null
           : applePlatform(altPlatform),
       alt_os_version: version(u32(FIELD.altOsVersion) ?? 0),
-      cache_type:
-        cacheType === 0
-          ? "development"
-          : cacheType === 1
-            ? "production"
-            : cacheType === 2
-              ? "multi-cache"
-              : null,
+      cache_type: decodeCacheType(
+        cacheType,
+        has(parsed, FIELD.cacheSubType, 4),
+      ),
       shared_region:
         u64(FIELD.sharedRegionStart) === null
           ? null
