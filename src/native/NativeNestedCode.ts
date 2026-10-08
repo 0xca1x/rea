@@ -19,14 +19,22 @@ const errorCode = (cause: unknown) =>
 
 /** Preserve reported paths, but qualify missing, denied or newline-ambiguous records. */
 export const unconfirmedNestedCode = async (
-  verification: { readonly validated_nested_code: readonly string[] },
+  verification: {
+    readonly validated_nested_code: readonly string[];
+    readonly prepared_nested_code?: readonly string[];
+  },
   signal?: AbortSignal,
   view: NativeNestedPathView = FILE_SYSTEM,
 ): Promise<string[]> => {
   signal?.throwIfAborted();
   const limitations: string[] = [];
   const directories = new Map<string, Promise<boolean>>();
-  for (const path of verification.validated_nested_code) {
+  const records = new Map<string, "prepared" | "validated">();
+  for (const path of verification.prepared_nested_code ?? [])
+    records.set(path, "prepared");
+  for (const path of verification.validated_nested_code)
+    records.set(path, "validated");
+  for (const [path, record] of records) {
     signal?.throwIfAborted();
     try {
       await view.lookup(path);
@@ -41,7 +49,7 @@ export const unconfirmedNestedCode = async (
       }
       if (code !== "ENOENT" && code !== "ENOTDIR") throw cause;
       limitations.push(
-        `codesign reported validated nested code at ${JSON.stringify(path)}, which does not exist; a nested path probably contains a newline, so validated_nested_code and diagnostics hold fragments of it.`,
+        `codesign reported ${record} nested code at ${JSON.stringify(path)}, which does not exist; a nested path probably contains a newline, so structured nested-code records and diagnostics may hold fragments of it.`,
       );
       continue;
     }
@@ -59,7 +67,7 @@ export const unconfirmedNestedCode = async (
       signal?.throwIfAborted();
       if (ambiguous)
         limitations.push(
-          `codesign reported validated nested code at ${JSON.stringify(path)}, which exists but could be the first line of a nested path containing a newline; validated_nested_code is ambiguous and should not be trusted as complete.`,
+          `codesign reported ${record} nested code at ${JSON.stringify(path)}, which exists but could be the first line of a nested path containing a newline; structured nested-code records are ambiguous and should not be trusted as complete.`,
         );
     } catch (cause: unknown) {
       signal?.throwIfAborted();
