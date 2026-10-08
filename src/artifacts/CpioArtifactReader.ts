@@ -228,6 +228,20 @@ const drain = async (chunks: AsyncIterable<Buffer>): Promise<void> => {
   for await (const chunk of chunks) void chunk;
 };
 
+/** Human-readable limitation for a collected (or skipped) symlink target. */
+const symlinkTargetLimitation = (
+  header: CpioHeader,
+  target: Buffer | undefined,
+): string => {
+  if (target === undefined)
+    return `Symlink target of ${header.fileSize} bytes exceeds ${MAX_SYMLINK_TARGET_BYTES} bytes and was not read.`;
+  try {
+    return `Symlink target: ${new TextDecoder("utf-8", { fatal: true }).decode(target)}`;
+  } catch {
+    return "Symlink target is not valid UTF-8 and was not decoded; the archived bytes are preserved only as a byte count.";
+  }
+};
+
 /**
  * Sequential reader for a gzip-compressed cpio archive, such as an installer
  * package's Scripts or Payload. Members are decompressed once, in order: open
@@ -357,31 +371,7 @@ export class CpioArtifactReader implements ArtifactReader {
     const type = header.mode & S_IFMT;
     const path = memberPath(raw);
     if (type === S_IFLNK) {
-      // A hostile header can declare a multi-gigabyte target; stream it past.
-      let target: Buffer | undefined;
-      if (header.fileSize > MAX_SYMLINK_TARGET_BYTES)
-        await drain(this.#verified(source, header, raw));
-      else target = await this.#collect(source, header, raw);
-      if (path !== undefined) {
-        let limitation: string;
-        if (target === undefined)
-          limitation = `Symlink target of ${header.fileSize} bytes exceeds ${MAX_SYMLINK_TARGET_BYTES} bytes and was not read.`;
-        else {
-          try {
-            limitation = `Symlink target: ${new TextDecoder("utf-8", { fatal: true }).decode(target)}`;
-          } catch {
-            limitation =
-              "Symlink target is not valid UTF-8 and was not decoded; the archived bytes are preserved only as a byte count.";
-          }
-        }
-        yield entryOf({
-          path,
-          kind: "symlink",
-          key,
-          header,
-          limitations: [limitation],
-        });
-      }
+      yield* this.#symlink(source, { header, raw, key }, path);
       return;
     }
     if (
@@ -450,6 +440,59 @@ export class CpioArtifactReader implements ArtifactReader {
       key,
       header,
       limitations: [],
+    });
+  }
+
+  /**
+   * One symlink member. A hostile header can declare a multi-gigabyte target,
+   * so oversized targets stream past. CRC failures surface before the entry
+   * is yielded, outside the scanner's per-entry recovery: under
+   * record-and-continue the symlink becomes an unavailable occurrence so
+   * later siblings still inventory.
+   */
+  async *#symlink(
+    source: ByteSource,
+    member: {
+      readonly header: CpioHeader;
+      readonly raw: string;
+      readonly key: string;
+    },
+    path: string | undefined,
+  ): AsyncGenerator<ArtifactEntry> {
+    const { header, raw, key } = member;
+    let target: Buffer | undefined;
+    let crcLimitation: string | undefined;
+    try {
+      if (header.fileSize > MAX_SYMLINK_TARGET_BYTES)
+        await drain(this.#verified(source, header, raw));
+      else target = await this.#collect(source, header, raw);
+    } catch (cause: unknown) {
+      if (
+        this.integrity !== "record-and-continue" ||
+        !(cause instanceof ArtifactReaderFailure) ||
+        cause.reason !== "integrity"
+      )
+        throw cause;
+      crcLimitation = cause.message;
+    }
+    if (path === undefined) return;
+    if (crcLimitation !== undefined) {
+      yield entryOf({
+        path,
+        kind: "symlink",
+        key,
+        header,
+        limitations: [crcLimitation],
+        contentUnavailable: true,
+      });
+      return;
+    }
+    yield entryOf({
+      path,
+      kind: "symlink",
+      key,
+      header,
+      limitations: [symlinkTargetLimitation(header, target)],
     });
   }
 

@@ -55,6 +55,9 @@ interface XarData {
   readonly archivedChecksum:
     | { readonly algorithm: string; readonly value: string }
     | undefined;
+  readonly unsupportedArchivedChecksum:
+    | { readonly style: string; readonly value: string }
+    | undefined;
 }
 
 interface XarMember {
@@ -131,6 +134,10 @@ const parseData = (file: Element): XarData | undefined => {
       archived === undefined || "unsupported" in archived
         ? undefined
         : { algorithm: archived.algorithm, value: archived.value },
+    unsupportedArchivedChecksum:
+      archived !== undefined && "unsupported" in archived
+        ? { style: archived.unsupported, value: archived.value }
+        : undefined,
   };
 };
 
@@ -154,6 +161,7 @@ const assertRawSize = (member: XarMember, data: XarData | undefined): void => {
 const memberLimitations = (
   member: XarMember,
   unsupportedChecksum: XarData["unsupportedChecksum"],
+  unsupportedArchived: XarData["unsupportedArchivedChecksum"],
   classified: { readonly limitations: readonly string[] },
 ): string[] => [
   ...(member.kind === "symlink" && member.link !== undefined
@@ -163,6 +171,11 @@ const memberLimitations = (
     ? []
     : [
         `Member declares unsupported checksum ${unsupportedChecksum.style}; integrity not verified.`,
+      ]),
+  ...(unsupportedArchived === undefined
+    ? []
+    : [
+        `Member declares unsupported archived checksum ${unsupportedArchived.style}; stored-byte integrity not verified.`,
       ]),
   ...classified.limitations,
 ];
@@ -237,15 +250,23 @@ const declaredDigest = (
     : { declaredSha256: null };
 };
 
+/**
+ * Absolute decoded-byte ceiling for one gzip member. The declared size is
+ * attacker-controlled, so it cannot be the only inflation bound.
+ */
+const MAX_DECODED_MEMBER_BYTES = 256 * 1024 * 1024;
+
 /** Bound decoded output to the TOC-declared extracted size. */
 class SizeBound extends Transform {
   #seen = 0;
+  #cap: number;
 
   constructor(
     private readonly path: string,
     private readonly expected: number,
   ) {
     super();
+    this.#cap = Math.min(expected, MAX_DECODED_MEMBER_BYTES);
   }
 
   override _transform(
@@ -254,11 +275,13 @@ class SizeBound extends Transform {
     done: TransformCallback,
   ): void {
     this.#seen += chunk.length;
-    if (this.#seen > this.expected) {
+    if (this.#seen > this.#cap) {
       done(
         new ArtifactReaderFailure(
           "limit",
-          `xar member ${this.path} decodes beyond its declared ${this.expected} bytes`,
+          this.expected > MAX_DECODED_MEMBER_BYTES
+            ? `xar member ${this.path} decodes beyond the ${MAX_DECODED_MEMBER_BYTES}-byte member ceiling`
+            : `xar member ${this.path} decodes beyond its declared ${this.expected} bytes`,
         ),
       );
       return;
@@ -309,7 +332,7 @@ class ChecksumVerifier extends Transform {
         ? null
         : new ArtifactReaderFailure(
             "integrity",
-            `xar ${this.expected.algorithm} checksum disagrees with content: ${this.path}`,
+            `xar ${this.expected.algorithm} checksum disagrees with content: ${this.path} (declared ${this.expected.value}, observed ${observed})`,
           ),
     );
   }
@@ -424,9 +447,26 @@ export class XarArtifactReader implements ArtifactReader {
     compressed: Buffer,
     headerAlg: number,
   ): Promise<void> {
-    const checksum = childElement(toc, "checksum");
+    // Fixed-header checksum IDs follow libarchive's XAR reader: 0 is none,
+    // 1 is SHA-1, 2 is MD5, 3 is SHA-256, 4 is SHA-512.
     const expectedStyle =
-      headerAlg === 1 ? "sha1" : headerAlg === 2 ? "md5" : undefined;
+      headerAlg === 0
+        ? null
+        : headerAlg === 1
+          ? "sha1"
+          : headerAlg === 2
+            ? "md5"
+            : headerAlg === 3
+              ? "sha256"
+              : headerAlg === 4
+                ? "sha512"
+                : undefined;
+    if (expectedStyle === undefined)
+      throw new ArtifactReaderFailure(
+        "format",
+        `xar header declares unsupported TOC checksum algorithm ${headerAlg}`,
+      );
+    const checksum = childElement(toc, "checksum");
     if (checksum === undefined) {
       if (headerAlg !== 0)
         throw new ArtifactReaderFailure(
@@ -436,10 +476,10 @@ export class XarArtifactReader implements ArtifactReader {
       return;
     }
     const style = checksum.getAttribute("style")?.toLowerCase() ?? "";
-    if (expectedStyle !== undefined && style !== expectedStyle)
+    if (expectedStyle !== null && style !== expectedStyle)
       throw new ArtifactReaderFailure(
         "format",
-        `xar TOC checksum style ${style || "(missing)"} does not match header algorithm ${expectedStyle}`,
+        `xar TOC checksum style ${style || "(missing)"} does not match header algorithm ${expectedStyle ?? "none"}`,
       );
     const algorithm = CHECKSUM_ALGORITHMS[style];
     if (algorithm === undefined)
@@ -552,8 +592,11 @@ export class XarArtifactReader implements ArtifactReader {
     const data = member.data;
     assertRawSize(member, data);
     const unsupportedChecksum = data?.unsupportedChecksum;
+    const unsupportedArchived = data?.unsupportedArchivedChecksum;
     const classified =
-      member.kind === "file" && unsupportedChecksum === undefined
+      member.kind === "file" &&
+      unsupportedChecksum === undefined &&
+      unsupportedArchived === undefined
         ? await this.#nestedArchive(member)
         : {
             nested: undefined as XarNestedArchive | undefined,
@@ -572,7 +615,12 @@ export class XarArtifactReader implements ArtifactReader {
           : null,
       ...declaredDigest(member.data?.extractedChecksum),
       unpacked: false,
-      limitations: memberLimitations(member, unsupportedChecksum, classified),
+      limitations: memberLimitations(
+        member,
+        unsupportedChecksum,
+        unsupportedArchived,
+        classified,
+      ),
       adapterKey: member.path,
       ...(classified.nested === undefined
         ? {}
