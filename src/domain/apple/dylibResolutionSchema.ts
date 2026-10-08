@@ -169,6 +169,8 @@ export const dylibResolutionResultSchema = z.strictObject({
       uuid: z.string(),
       architecture: z.string(),
       os_version: z.string().nullable(),
+      main_file_sha256: digestSchema,
+      subcache_sha256: z.record(z.string(), digestSchema).default({}),
     })
     .nullable(),
   roots: z.array(

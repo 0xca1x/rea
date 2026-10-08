@@ -187,6 +187,7 @@ const readHeader = async (file: CacheFile): Promise<ParsedHeader> => {
   if (
     mappingOffset < 0x20 ||
     mappingOffset > MAX_HEADER_BYTES ||
+    mappingCount === 0 ||
     mappingCount > MAX_MAPPINGS
   )
     throw new ArtifactReaderFailure(

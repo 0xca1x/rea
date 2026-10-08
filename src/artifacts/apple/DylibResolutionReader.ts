@@ -148,19 +148,24 @@ export const traceDylibResolution = async (options: {
         "integrity",
         `Active target digest changed: expected ${options.targetSha256}, observed ${targetDigest}`,
       );
+    // Bind the trace to the cache bytes that produced it: a replaced cache
+    // can retain header UUID/architecture while changing resolutions.
+    const cacheIdentity =
+      cache === undefined || parsed.data.shared_cache === undefined
+        ? null
+        : {
+            path: resolve(parsed.data.shared_cache),
+            uuid: cache.header.uuid,
+            architecture: cache.header.architecture,
+            os_version: cache.header.os_version,
+            main_file_sha256: await cache.mainSha256(options.signal),
+            subcache_sha256: await cache.subcacheSha256(options.signal),
+          };
     return dylibResolutionResultSchema.parse({
       ...trace,
       root_path: options.rootPath,
       target_sha256: options.targetSha256,
-      shared_cache:
-        cache === undefined || parsed.data.shared_cache === undefined
-          ? null
-          : {
-              path: resolve(parsed.data.shared_cache),
-              uuid: cache.header.uuid,
-              architecture: cache.header.architecture,
-              os_version: cache.header.os_version,
-            },
+      shared_cache: cacheIdentity,
       images: trace.images.map((image) => ({
         ...image,
         sha256: digests.get(image.path),
