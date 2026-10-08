@@ -5,6 +5,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 
 const PURE_LAYERS = new Set(["domain", "contracts"]);
 const MIGRATED_PROVIDER_ROOTS = new Set([
+  "evm",
   "android",
   "firmware",
   "ghidra",
@@ -61,6 +62,14 @@ const failedBoundary = (file, target) => {
   const layer = file.split("/")[1];
   const targetLayer = target.split("/")[1];
   if (
+    file.startsWith("src/process/capture/") &&
+    (["application", "composition", "server", "cli", "main"].includes(
+      targetLayer,
+    ) ||
+      /^src\/(?:cli|main)\./u.test(target))
+  )
+    return "process-capture";
+  if (
     file.startsWith("src/application/javascript/") &&
     /^src\/artifacts\/(?:Asar|Directory)ArtifactReader\.(?:js|ts)$/u.test(
       target,
@@ -70,6 +79,8 @@ const failedBoundary = (file, target) => {
   if (
     (file.startsWith("src/artifacts/javascript/") ||
       file.startsWith("src/artifacts/apple/") ||
+      file.startsWith("src/artifacts/inventory/") ||
+      file.startsWith("src/artifacts/extraction/") ||
       /^src\/artifacts\/ArtifactHash\.(?:js|ts)$/u.test(file)) &&
     (["application", "composition", "server", "cli", "main"].includes(
       targetLayer,

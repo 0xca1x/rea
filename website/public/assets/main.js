@@ -60,3 +60,49 @@ function initializeStepComparisons() {
 }
 
 initializeStepComparisons();
+
+function initializeFaqAnswers() {
+  const answers = document.querySelectorAll("[data-faq] details[id]");
+  if (answers.length === 0) return;
+
+  const revealAnswer = (fragment) => {
+    answers.forEach((answer) => {
+      if (`#${answer.id}` === fragment) answer.open = true;
+    });
+  };
+  window.addEventListener("hashchange", () =>
+    revealAnswer(window.location.hash),
+  );
+  document.querySelectorAll('[data-faq] a[href^="#"]').forEach((link) => {
+    link.addEventListener("click", () =>
+      revealAnswer(link.getAttribute("href")),
+    );
+  });
+  revealAnswer(window.location.hash);
+}
+
+initializeFaqAnswers();
+
+function initializeBackToTop() {
+  const link = document.querySelector(".back-to-top");
+  if (link === null) return;
+
+  const updateVisibility = () => {
+    link.hidden = window.scrollY < 400;
+  };
+  window.addEventListener("scroll", updateVisibility, { passive: true });
+  updateVisibility();
+
+  link.addEventListener("click", (event) => {
+    event.preventDefault();
+    const reduceMotion = window.matchMedia(
+      "(prefers-reduced-motion: reduce)",
+    ).matches;
+    window.scrollTo({ top: 0, behavior: reduceMotion ? "auto" : "smooth" });
+    document
+      .querySelector(".brand, .breadcrumb a")
+      ?.focus({ preventScroll: true });
+  });
+}
+
+initializeBackToTop();

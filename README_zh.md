@@ -15,6 +15,10 @@
 [![MIT license](https://img.shields.io/badge/license-MIT-f4c430?style=flat-square)](LICENSE)
 [![Discord](https://img.shields.io/discord/1556595354999332884?logo=discord&logoColor=white&label=Discord&color=5865F2)](https://discord.gg/GkcryMnJDM)
 
+🎉 **GitHub Star 突破 20,000，感谢大家！**
+
+感谢每一位使用 REA、反馈问题、测试构建和贡献修复的朋友。
+
 <a href="https://trendshift.io/repositories/82054?utm_source=repository-badge&amp;utm_medium=badge&amp;utm_campaign=badge-repository-82054" target="_blank" rel="noopener noreferrer"><img src="https://trendshift.io/api/badge/repositories/82054" alt="morluto%2Frea | Trendshift" width="250" height="55"/></a>
 
 **[网站（英文）](https://morluto.github.io/rea/) · [使用指南](https://morluto.github.io/rea/guides/) · [DX-Ball 案例](https://morluto.github.io/rea/showcase/dx-ball/)**
@@ -138,7 +142,7 @@ rea setup
 ### 系统要求
 
 - macOS 12 或更高版本
-- Ubuntu 24.04+、Fedora 41+ 或 64 位 Arch Linux
+- Ubuntu 24.04+、Fedora 41+、64 位 Arch Linux 或 CachyOS
 - Node.js 22.x (>=22.19)、24.x (>=24.11) 或 26+，以及 npm
 
 原生二进制分析需要 Hopper 或 Ghidra。Hopper 是独立软件；演示模式有厂商规定的限制，不要求购买许可证。
@@ -153,7 +157,7 @@ Setup 可以验证安装并保存路径，不会安装或升级 Ghidra、Java、
 
 运行 `npx -y rea-agents@latest doctor`，检查主机、依赖、分析工具和智能体配置。该命令不会修改文件。添加 `--json` 可获取结构化诊断。
 
-Linux 上的默认 Hopper 启动器为 `/opt/hopper/bin/Hopper`。其他路径可通过 `HOPPER_LAUNCHER_PATH` 指定。如果文件存在但仍报告缺少分析引擎，运行 `ldd /opt/hopper/bin/Hopper | grep 'not found'` 检查缺少的系统库。安装详情见 [Hopper 指南](docs/installation.md#hopper)。
+Linux 上 REA 会优先使用可执行的 `/opt/hopper/bin/Hopper`；如果不可用，则自动检查 `~/.local/share/rea/hopper/bin/Hopper`。其他路径可通过 `HOPPER_LAUNCHER_PATH` 指定。如果文件存在但仍报告缺少分析引擎，请对实际 Hopper 路径运行 `ldd /absolute/path/to/Hopper | grep 'not found'` 检查缺少的系统库。安装详情见 [Hopper 指南](docs/installation.md#hopper)。
 
 ### 更新与卸载
 
@@ -202,20 +206,20 @@ REA 负责第 1–5 步中的二进制分析。第 6 步由智能体使用其常
 
 ## 调查工具目录
 
-| 工具类别          | 数量 | 用途                                                                                                   |
-| ----------------- | ---: | ------------------------------------------------------------------------------------------------------ |
-| 原生检查          |   41 | 函数、伪代码、汇编、字符串、符号、调用、引用、注释、字节读取与文件偏移                                 |
-| 调查工作流        |   14 | 应用概览、函数档案、原生 API 与分发、批量反编译、功能追踪、调用路径与调用图、Swift 与 Objective-C 发现 |
-| macOS 原生工具    |    7 | Mach-O 元数据、代码签名、plist、架构与 Swift 符号还原，无需启动 Hopper                                 |
-| 产物图            |    5 | 目录与软件包清单、编译后的 Interface Builder 文件、Apple 资源目录与提取                                |
-| 托管 PE/CLI       |    7 | .NET 程序集身份、元数据、CIL 指令、原生依赖声明、重建导入与构建比较                                    |
-| 固件              |    2 | Linux 固件区域检查与显式提取                                                                           |
-| Android APK       |    5 | 包与 manifest 声明、类搜索、成员清单、方法反编译与静态引用                                             |
-| 浏览器观察        |   11 | 页面结构、网络元数据、脚本、来源映射、WebMCP 发现、截图与捕获比较                                      |
-| Electron 分析     |    5 | 渲染进程观察、静态应用映射、静态/运行时结果关联                                                        |
-| JavaScript 运行时 |    2 | Node/Electron Inspector 目标发现、脚本位置与执行上下文事件                                             |
-| 应用工作流        |   13 | 捕获的网站脚本导出、跨层功能追踪、构建比较、历史源码映射、静态返回结构比较与重建验证                   |
-| 工作区与观察      |   21 | 会话、证据包、导航上下文、进程/产物/函数比较与待解决问题跟踪                                           |
+| 工具类别          | 数量 | 用途                                                                                                                 |
+| ----------------- | ---: | -------------------------------------------------------------------------------------------------------------------- |
+| 原生检查          |   41 | 函数、伪代码、汇编、字符串、符号、调用、引用、注释、字节读取与文件偏移                                               |
+| 调查工作流        |   14 | 应用概览、函数档案、原生 API 与分发、批量反编译、功能追踪、调用路径与调用图、Swift 与 Objective-C 发现               |
+| 原生二进制工具    |   10 | macOS 的 Mach-O 元数据、签名、plist、架构、Swift 符号与 LLDB 调用观察；Linux 的 ELF 布局、静态保护证据与历史崩溃记录 |
+| 产物图            |    7 | 目录与软件包清单、编译后的 Interface Builder 文件、Apple 资源目录、Mach-O dylib 加载解析、提取与离线 EVM 接口推断    |
+| 托管 PE/CLI       |    7 | .NET 程序集身份、元数据、CIL 指令、原生依赖声明、重建导入与构建比较                                                  |
+| 固件              |    2 | Linux 固件区域检查与显式提取                                                                                         |
+| Android APK       |    5 | 包与 manifest 声明、类搜索、成员清单、方法反编译与静态引用                                                           |
+| 浏览器观察        |   12 | 页面结构、网络元数据、脚本、来源映射、WebMCP 发现、截图与捕获比较                                                    |
+| Electron 分析     |    5 | 渲染进程观察、静态应用映射、静态/运行时结果关联                                                                      |
+| JavaScript 运行时 |    2 | Node/Electron Inspector 目标发现、脚本位置与执行上下文事件                                                           |
+| 应用工作流        |   13 | 捕获的网站脚本导出、跨层功能追踪、构建比较、历史源码映射、静态返回结构比较与重建验证                                 |
+| 工作区与观察      |   21 | 会话、证据包、导航上下文、进程/产物/函数比较与待解决问题跟踪                                                         |
 
 ## 路线图
 
@@ -232,7 +236,7 @@ Setup 支持 Claude Code、Claude Desktop、Codex、Cursor、Gemini CLI、Windsu
   "mcpServers": {
     "rea": {
       "command": "npx",
-      "args": ["-y", "rea-agents@4.1.0", "mcp"]
+      "args": ["-y", "rea-agents@6.0.0", "mcp"]
     }
   }
 }

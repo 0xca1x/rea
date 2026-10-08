@@ -149,6 +149,8 @@ const comparisonLimitations = (
   input: ApplicationVersionComparisonProjectionInput,
 ): string[] =>
   uniqueSorted([
+    ...input.left.graph.limitations,
+    ...input.right.graph.limitations,
     "Application comparison never uses bundler module ordinals as persistent identity and performs no fuzzy pairing.",
     "Exact digest equality proves byte identity only; source-map, structural-fingerprint, and semantic-key matches retain inferred confidence.",
     "Minified names and chunk locations are not assumed stable across versions.",

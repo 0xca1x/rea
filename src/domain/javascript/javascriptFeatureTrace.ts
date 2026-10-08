@@ -119,6 +119,7 @@ const noMatchResult = (
     evidence_links: [input.sourceEvidenceId],
     limitations: uniqueSorted([
       "No graph entity matched the literal seed; this is not evidence that the feature is absent.",
+      ...input.graph.limitations,
       ...sourceCoverageLimitations(input.graph),
     ]),
   };
@@ -239,6 +240,7 @@ const traceCoverageStatus = (
 
 const traceLimitations = (graph: JavaScriptApplicationGraph): string[] =>
   uniqueSorted([
+    ...graph.limitations,
     "A trace reports graph relationships, not proof that code executed or that a feature is reachable in every state.",
     "Static, native, passive-runtime, inferred, and unknown facts retain their original authority in the returned graph.",
     "Native handoffs never open a binary or invoke a provider automatically; snapshot reuse remains provider/profile/target exact.",

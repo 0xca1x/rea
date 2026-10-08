@@ -6,7 +6,7 @@ import type { JavaScriptApplicationGraph } from "../../domain/javascript/javascr
 import type { JavaScriptSemanticGraph } from "../../domain/javascript/javascriptSemanticGraph.js";
 import type { ElectronBoundarySummary } from "../../domain/javascript/javascriptApplicationAnalysis.js";
 import type { IntegrityContradiction } from "../../domain/artifactGraph.js";
-import { analyzeJavaScriptArtifactFiles } from "./JavaScriptArtifactAnalysis.js";
+import { analyzeAndProjectJavaScriptArtifactFiles } from "./JavaScriptArtifactAnalysis.js";
 import { readJavaScriptArtifactFiles } from "../../artifacts/javascript/JavaScriptArtifactFiles.js";
 import {
   buildJavaScriptArtifactGraph,
@@ -16,9 +16,10 @@ import {
   javascriptArtifactReconstructionInputSchema,
   type JavaScriptArtifactReconstructionInput,
 } from "./JavaScriptArtifactReconstructionInput.js";
-import { scanCanonicalArtifactInventory } from "../ArtifactInventory.js";
+import { scanCanonicalArtifactInventory } from "../../artifacts/inventory/ArtifactInventory.js";
 import { summarizeElectronBoundaries } from "./ElectronBoundaryAnalysis.js";
-import { buildJavaScriptSemanticGraph } from "./JavaScriptSemanticGraphBuilder.js";
+import { createJavaScriptSemanticGraphProjection } from "./JavaScriptSemanticGraphBuilder.js";
+import type { ProgressReporter } from "../ProgressReporter.js";
 
 /** Application-layer result retaining local diagnostics outside the canonical graph. */
 export interface JavaScriptArtifactReconstructionResult {
@@ -50,7 +51,11 @@ export interface JavaScriptArtifactReconstructionResult {
 export const reconstructJavaScriptArtifact = async (
   rawInput: unknown,
   signal?: AbortSignal,
+  progress?: ProgressReporter,
 ): Promise<JavaScriptArtifactReconstructionResult> => {
+  const reportPhase = async (phase: string, message: string): Promise<void> => {
+    await progress?.report({ phase, completed: 0, total: 1, message });
+  };
   const input = javascriptArtifactReconstructionInputSchema.parse(rawInput);
   abortIfNeeded(signal);
   const path = await realpath(input.input_path);
@@ -66,16 +71,46 @@ export const reconstructJavaScriptArtifact = async (
     );
   const reader = createReader(path, format);
   try {
+    await reportPhase(
+      "read_javascript_artifacts",
+      "Reading inventoried JavaScript application sources",
+    );
     const files = await readJavaScriptArtifactFiles(reader, snapshot, signal);
-    const analysis = analyzeJavaScriptArtifactFiles(files);
+    await reportPhase(
+      "parse_javascript_sources",
+      `Parsing and projecting ${String(files.files.length)} application source files`,
+    );
+    const semanticProjection = createJavaScriptSemanticGraphProjection();
+    const analysis = await analyzeAndProjectJavaScriptArtifactFiles(
+      files,
+      semanticProjection.projectFile,
+      async (file, completed, total) => {
+        abortIfNeeded(signal);
+        await progress?.report({
+          phase: "parse_javascript_source",
+          completed: 0,
+          total: 1,
+          message: `Parsing and projecting ${file.path} (${String(completed + 1)}/${String(total)})`,
+        });
+        abortIfNeeded(signal);
+      },
+    );
     abortIfNeeded(signal);
+    await reportPhase(
+      "build_javascript_application_graph",
+      "Constructing application and Electron boundary relationships",
+    );
     const graph = buildJavaScriptArtifactGraph(snapshot, files, analysis);
-    const semanticGraph = buildJavaScriptSemanticGraph({
-      rootArtifactSha256: snapshot.manifest.root_sha256,
-      applicationGraph: graph,
+    await reportPhase(
+      "build_javascript_semantic_graph",
+      "Binding and validating static semantic relationships",
+    );
+    const semanticGraph = semanticProjection.finish(
+      snapshot.manifest.root_sha256,
+      graph,
       analysis,
-      sourceLimitations: integrityContradictionLimitations(snapshot),
-    });
+      integrityContradictionLimitations(snapshot),
+    );
     return {
       input_path: path,
       format,

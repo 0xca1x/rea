@@ -25,7 +25,7 @@ part of the current tool set.
 
 This guide describes the implementation and verification of
 [ADR-0003](adr/0003-managed-code-evidence-and-provider-boundary.md). The canonical
-tool inventory is [`product-catalog.json`](https://github.com/morluto/rea/blob/main/docs/product-catalog.json).
+tool inventory is the [build-generated catalog](mcp-contracts.md#generated-catalog).
 
 ## Shipped scope
 
@@ -125,7 +125,7 @@ The upstream analyzer currently gates its own analysis to x86-64. NativeAOT's
 broader platform matrix does not establish REA coverage: PE/COFF, ELF, Mach-O,
 shared libraries, target architectures, and runtime metadata versions each need
 their own provider verification. REA's experimental Windows Ghidra boundary is
-limited to admitted native x86-64 PE applications, so it does not currently
+limited to admitted native x86 and x86-64 PE applications, so it does not currently
 establish coverage for PE DLLs. Mobile NativeAOT targets should remain
 experimental until REA has a matching provider and package-level verification.
 

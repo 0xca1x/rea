@@ -1,4 +1,5 @@
 import { z } from "incur";
+import { artifactIntegrityPolicySchema } from "../domain/artifactGraph.js";
 import { stat } from "node:fs/promises";
 import { resolve } from "node:path";
 
@@ -13,13 +14,18 @@ import {
 } from "./options.js";
 import type { CliInstance } from "./types.js";
 import { runCliJavaScriptApplicationAnalysis } from "./javascriptApplicationAnalysis.js";
+import type {
+  CliCommandOutput,
+  CliResultOutput,
+} from "./streamedJsonOutput.js";
 
 /** Register provider-neutral binary overview and procedure CLI commands. */
 export const registerCoreBinaryCommands = (
   cli: CliInstance,
   logger: Logger,
+  resultOutput?: CliResultOutput,
 ): void => {
-  registerOverviewCommands(cli, logger);
+  registerOverviewCommands(cli, logger, resultOutput);
   registerFunctionCommand(cli, logger);
   registerInstructionsCommand(cli, logger);
   registerSearchCommand(cli, logger);
@@ -27,7 +33,11 @@ export const registerCoreBinaryCommands = (
   registerTraceCommand(cli, logger);
 };
 
-const registerOverviewCommands = (cli: CliInstance, logger: Logger): void => {
+const registerOverviewCommands = (
+  cli: CliInstance,
+  logger: Logger,
+  resultOutput?: CliResultOutput,
+): void => {
   const overviewOptions = z.object({
     snapshot: z
       .string()
@@ -43,19 +53,20 @@ const registerOverviewCommands = (cli: CliInstance, logger: Logger): void => {
       path: z.string().describe("App, program, or analysis database path"),
     }),
     options: overviewOptions.extend({
-      integrityPolicy: z
-        .enum(["fail", "record-and-continue"])
-        .default("fail")
-        .describe(
-          "Behavior when a routed JavaScript application declares integrity that does not match",
-        ),
+      integrityPolicy: artifactIntegrityPolicySchema.describe(
+        "Behavior when declared JavaScript artifact integrity does not match",
+      ),
     }),
-    alias: {
-      integrityPolicy: "integrity-policy",
-    },
-    run: ({ args, options }) =>
+    run: ({ args, options, format }) =>
       logCliCommand(logger, "analyze", () =>
-        runRoutedOverview(args.path, options, logger),
+        runRoutedOverview(
+          args.path,
+          options,
+          logger,
+          resultOutput === undefined
+            ? undefined
+            : { output: resultOutput, command: CLI_COMMANDS.analyze, format },
+        ),
       ),
   });
   cli.command(CLI_COMMANDS.inspect, {
@@ -120,6 +131,7 @@ const runRoutedOverview = async (
     readonly integrityPolicy?: "fail" | "record-and-continue" | undefined;
   },
   logger: Logger,
+  output?: CliCommandOutput,
 ) => {
   if (
     options.provider === undefined &&
@@ -127,10 +139,13 @@ const runRoutedOverview = async (
     options["target-format"] === undefined &&
     (await isJavaScriptApplicationPath(path))
   )
-    return runCliJavaScriptApplicationAnalysis({
-      input_path: resolve(path),
-      integrity_policy: options.integrityPolicy ?? "fail",
-    });
+    return runCliJavaScriptApplicationAnalysis(
+      {
+        input_path: resolve(path),
+        integrity_policy: options.integrityPolicy ?? "fail",
+      },
+      output,
+    );
   return runDirectAnalysis(
     path,
     "binary_overview",

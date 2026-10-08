@@ -30,6 +30,14 @@ different recovery: reinstall REA for the active platform, architecture, and
 Node.js version with optional dependencies enabled. Capability diagnostics
 distinguish this from the Windows capture-adapter limitation.
 
+macOS also requires Apple's Swift compiler through `xcrun` for process
+ownership inspection. REA compiles its packaged, narrow process-inspection
+helper into a private temporary directory before a capture or owned provider
+process starts; the same prerequisite applies to owned provider-process
+supervision on macOS. REA removes that directory when it exits. REA does not
+install Xcode, Command Line Tools, or other software. Capability checks prepare
+this helper before reporting macOS capture as available.
+
 ## Capture a command
 
 Write a JSON scenario and pass its path to the CLI:
@@ -93,6 +101,12 @@ than treating missing data as proof of equivalence. Cancellation and timeout
 run the same owned-process cleanup path. Settlement reports whether the
 sampled process group quiesced or whether cleanup was needed or unverifiable;
 sampling cannot prove that every short-lived or detached descendant was seen.
+
+When the host withholds an unrelated process’s ownership token, REA leaves that
+process untouched and records its PID and reason in `cleanup.unverified_processes`
+and process residual unknowns. Successful cleanup verifies the owned group;
+it does not attribute those unrelated processes. Related or otherwise unexplained
+unreadable processes still prevent successful cleanup.
 
 ## Compare two captures
 

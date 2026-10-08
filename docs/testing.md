@@ -6,10 +6,27 @@ from real captured inputs. Keep focused module tests for distinct failure or
 semantic cases that these workflows cannot reliably reproduce. A test's path
 or suite name does not establish its behavioral depth.
 
+Avoid tests that mirror getters, enum mappings, fixture helpers, or prescribed
+call sequences. Prefer one representative workflow over a Cartesian matrix
+when every row crosses the same boundary. Keep distinct command handlers,
+producer representations, failure reasons, and lifecycle states covered.
+Consolidate their shared setup without hiding the inputs or expected evidence.
+
 Tests are grouped into Vitest projects so ownership, allowed dependencies and
-runtime cost are visible from their paths. Before pruning a test, identify the
-replacement scenario and its assertions; passing success journeys do not
-replace malformed input, cancellation, permission or cleanup coverage.
+runtime cost are visible from their paths. Before pruning a distinct boundary
+regression, identify the replacement scenario and its assertions; passing
+success journeys do not replace malformed input, cancellation, permission or
+cleanup coverage. Trivial helper checks do not need a replacement. If only
+tests consume a production module, trace CLI/MCP and verifier imports,
+including imports of compiled files, and remove abandoned scaffolding with its
+tests when it has no runtime consumer.
+
+Measure slow files before removing capacity regressions. Optimize repeated
+process startup, fixture construction, and production algorithms when they
+dominate runtime. Keep at least one input beyond each formerly failing size or
+depth; smaller fixtures do not establish that truncation or stack exhaustion
+has been fixed. Record the toolchain, coverage mode, and cache conditions when
+comparing durations.
 
 ## Behavioral depths
 
@@ -87,7 +104,16 @@ extension, a login item, a privileged helper, launchd plists, and a helper tool,
 signed ad hoc. It packs the app as a directory, a `ditto` ZIP, and an APFS DMG,
 then checks that `inspect-artifact` plus `project-apple-application-graph`
 report the same bundle anatomy for all three through the CLI, with stdio MCP
-parity. It also checks that the DMG is detached afterwards. It runs in macOS CI.
+parity. It also checks that the DMG is detached afterwards. The same app
+covers `trace-dylib-resolution`:
+
+- each resolution status and finding, with CLI/MCP parity;
+- for every traced image, dependencies, rpaths, and install names equal to
+  `otool -l`;
+- for the main executable and an XPC service, a predicted load order equal to
+  the images dyld actually loads under `DYLD_PRINT_LIBRARIES`.
+
+It runs in macOS CI.
 
 Apple artifact verifiers live in `scripts/verify/apple/`, with the macOS bundle
 builder under `scripts/fixtures/apple/` and NIB byte fixtures beside the decoder
@@ -102,6 +128,15 @@ host UI tests retain their adapter/boundary lanes, and real verifier command
 names remain unchanged.
 The existing Apple CI job also runs the host Swift-demangling CLI/MCP regression
 suites, including option-like symbols, carriage returns and multiline rejection.
+
+Process semantics/tests live in `src/domain/process/`; PTY capture implementation
+and forked helper tests live in `src/process/capture/`. Evidence projection and
+file workflows live in `src/application/process/`; producer-backed Evidence/host
+cases run in the serial `tests/boundary/process/` lane. Installed-package probes
+load the compiled capture capability owner, including the missing-optional-module
+case. Real capture tests preserve actual descendant and cleanup checks.
+The existing Apple job also exercises the relocated filesystem snapshot identity,
+cancellation and descriptor cleanup regressions on macOS.
 
 MCP SDK transport tests with recording providers remain integration tests.
 They are useful for schema drift and failure projection but do not prove that
@@ -171,7 +206,7 @@ prove behavior on the verified Ghidra 12.1.4 and JDK 21 build.
 | `npm run verify:ghidra:switch`             | Linux x64 ELF; GCC/Clang optimized and stripped switch fixtures                    | GCC, Clang, GNU nm/objdump/strip, Ghidra 12.1.4, and full JDK 21    |
 | `npm run verify:ghidra:aarch64-jump-table` | Any supported Ghidra host; AArch64 ELF; byte/halfword tables; host ARM64 Mach-O    | Clang with AArch64 target support, Ghidra 12.1.4, and full JDK 21   |
 | `npm run verify:ghidra:cross-format`       | Any supported Ghidra host; also analyzes AArch64 ELF, x86-64 PE, and x86-64 Mach-O | `clang`, LLD, and `lld-link` in addition to host-lane prerequisites |
-| `npm run verify:ghidra:windows`            | Controlled Windows x64 with native x86-64 PE                                       | Ghidra 12.1.4, full JDK 21, and the matching native artifact        |
+| `npm run verify:ghidra:windows`            | Controlled Windows x64 with native x86-64 PE; `-- --x86` selects native x86 PE     | Ghidra 12.1.4, full JDK 21, and the matching native artifact        |
 
 Windows native conformance runs with `npm run verify:windows-native` and does
 not require Ghidra or Java. An optional independently compiled Windows fixture
@@ -494,6 +529,17 @@ conformance/vtable fixture.
   `positive_e2e: false`; it must not be reported as capture/action proof.
   Both commands reject a changed executable digest and clean up the fixture
   process and helper. These lanes require an interactive macOS desktop. See [native investigation](native-investigation.md)
+
+`npm run verify:native-calls` needs only macOS with Command Line Tools (`clang`,
+`lldb`, `codesign`, `nm`). It compiles `tests/conformance/native/calls.m` and
+runs `observe-native-calls` through the CLI and stdio MCP. It checks:
+
+- the receiver class, selector and argument registers of every entry, and that
+  breakpoint addresses equal `nm`'s symbol addresses;
+- captured stdout and an environment override;
+- the event-limit and duration outcomes, with the process confirmed gone;
+- that a hardened-runtime copy is refused with `debugger-attach-denied`, and
+  that the same copy signed with `get-task-allow` is traced.
   for the exact ABI, authority, graph and observation boundaries.
 
 ### Firmware adapters
@@ -552,6 +598,18 @@ conditional `real-web-source-map` CI job supplies Chrome and an isolated pinned
 fixture compiler; static/unit checks do not acquire a browser. See
 [the source location guide](web-source-location.md) for the verified decoder profile.
 
+### JavaScript large-output lane
+
+`npm run verify:javascript:output` exercises the CLI JSON result surface beyond
+the running Node engine's single-string limit. Shared input leaves keep the
+fixture's graph small; the verifier writes one temporary output file, checks its
+complete byte count and an independent digest, then removes it. It requires only
+Node and the built REA runtime, with space for the output plus a 1 GiB reserve.
+Run `npm run verify:javascript:output -- jsonl` for compact JSONL coverage. This
+opt-in lane is separate from routine tests and the canonical hash check
+`npm run verify:javascript:digests`. It verifies serialization rather than an
+arbitrary third-party application's parsing cost or MCP client capacity.
+
 ### Website runtime attribution lane
 
 `npm run verify:browser:runtime` uses caller-supplied
@@ -567,3 +625,75 @@ same checks through an isolated installed package. The conditional
 compiler. Ordinary unit/static gates acquire no browser. See
 [website runtime attribution](web-runtime.md) for effects, resource bounds and
 coverage limits.
+
+### Offline binary layout
+
+`npm run verify:binary:layout` requires Linux x64, GCC/binutils, absolute
+`REA_PWNTOOLS_PYTHON` with pwntools 4.15.0/pyelftools 0.33/Unicorn 2.1.2 and
+absolute `REA_VERIFY_STRACE_COMMAND`. It compiles ephemeral source-owned ELF
+fixtures and checks public CLI/MCP, lossless addresses/names, file ranges,
+mitigation inferences, malformed/unsupported input, original file hashes and
+released process ownership. Exec syscall tracing must identify only the declared
+Node/Python launchers; no target binary is executed. Core/debugger claims need
+separate verification lanes. Pass an installed package entrypoint as the script's
+first argument to verify packaging independently of the checkout.
+The valid SHN_XINDEX fixture has 65,281 full section rows; CLI is checked in
+the ordinary lane. Its large MCP transfer is opt-in with
+`REA_VERIFY_LARGE_ELF_MCP=1` (or the workflow dispatch `large_mcp` input), an
+explicit 256 MiB SDK receive buffer and five-minute request timeout. Ordinary
+MCP fixtures retain the pinned SDK defaults.
+
+### Offline EVM interface
+
+`npm run verify:evm:interface` requires Linux x64, an absolute
+`REA_VERIFY_STRACE_COMMAND`, caller-supplied util-linux `prlimit` and `REA_VERIFY_SOLC_MODULE` selecting the absolute module path for
+solc 0.8.30. It compiles source-owned plain/optimized/via-IR Cancun fixtures in
+private storage and checks actual CLI/MCP selector evidence, raw/hex identity,
+unknowns, malformed carriers and independent cleanup. An optional positional
+entrypoint verifies a fresh installed package. It acquires no engine, compiler
+or chain dependency and does not execute a contract on a chain.
+
+### Recorded crash evidence
+
+`npm run verify:recorded:crash` is a separate Linux x64 lane. It requires GCC,
+GDB, absolute `REA_PWNTOOLS_PYTHON` with the offline ELF profile above,
+`REA_PWNDBG_GDBINIT` and `REA_PWNDBG_VENV_PATH` with unchanged pwndbg 2026.09.15,
+and `REA_VERIFY_STRACE_COMMAND`. Its disposable CI runner installs GDB, checks out the exact upstream
+commit and installs its frozen lockfile in isolated runner storage. No developer
+host configuration or core-pattern setting changes.
+
+Fixture generation explicitly runs an owned source-built two-thread program
+under GDB to create a recording. Subsequent public CLI/MCP inspection verifies
+lossless high registers, signed signals, note source bytes, malformed/missing
+notes, unfamiliar owners, optional core-only mapping context and actionable
+missing/unsupported plugin errors. A historical-PID collision fixture references
+an owned live sentinel; inspection syscall traces reject process attach/memory
+access, provider lookups of that PID's `/proc` files and attempted Internet sockets. Traces admit
+the observed upstream startup helpers (`iconv -l`, the selected checkout's Git
+version lookup) and REA ownership inspection separately from target execution.
+This is fixture evidence, not a sandbox claim. Inputs remain unchanged and the
+sentinel must stay alive; owned cleanup and empty verifier descendants are required. Pass an
+installed package entrypoint as the script's first argument for package coverage.
+
+## Agent evaluation and conformance records
+
+Evaluate native, JavaScript, managed and browser investigation tasks through a
+real local Codex CLI with:
+
+```bash
+npm run verify:agent
+```
+
+Its report records tool selection, repeated calls, token use, completion quality,
+and handling of permissions and unknowns.
+
+Regenerate the managed conformance manifest and Evidence completion ledger from
+live verification results, or check them for drift:
+
+```bash
+npm run evidence:generate
+npm run evidence:check
+```
+
+The records preserve unsupported and unverified coverage as explicit unknowns.
+Run the matching real-tool prerequisites described in this guide.

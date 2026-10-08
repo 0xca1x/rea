@@ -13,9 +13,10 @@ import {
   captureProcessScenarioFile,
   compareProcessEvidenceFiles,
   projectProcessCliError,
-} from "../../../src/application/ProcessCli.js";
+} from "../../../src/application/process/ProcessCli.js";
 import { createEvidence } from "../../../src/domain/evidence.js";
-import { PROCESS_PROVIDER } from "../../../src/application/ProcessEvidence.js";
+import { PROCESS_PROVIDER } from "../../../src/application/process/ProcessEvidence.js";
+import { INVESTIGATION_EXAMPLES } from "../../../src/contracts/investigationExamples.js";
 
 const roots: string[] = [];
 const execFileAsync = promisify(execFile);
@@ -120,8 +121,17 @@ describe("process CLI errors", () => {
     const root = await fixture();
     const malformed = join(root, "malformed.json");
     const invalid = join(root, "invalid.json");
+    const invalidUtf8 = join(root, "invalid-utf8.json");
     await writeFile(malformed, "not-json");
     await writeFile(invalid, "{}");
+    await writeFile(
+      invalidUtf8,
+      Buffer.concat([
+        Buffer.from('{"executable":"'),
+        Buffer.from([0xff]),
+        Buffer.from('"}'),
+      ]),
+    );
 
     expect(
       await captureProcessScenarioFile(join(root, "missing.json")),
@@ -132,6 +142,12 @@ describe("process CLI errors", () => {
         "Process input file could not be read. Check that the path exists and is readable.",
     });
     expect(await captureProcessScenarioFile(malformed)).toEqual({
+      error: "Process command failed",
+      category: "invalid_input",
+      message:
+        "Process input file is not valid JSON. Repair the file, then try again.",
+    });
+    expect(await captureProcessScenarioFile(invalidUtf8)).toEqual({
       error: "Process command failed",
       category: "invalid_input",
       message:
@@ -153,6 +169,66 @@ describe("process CLI errors", () => {
     });
   });
 
+  it("rejects NUL arguments before process launch", async () => {
+    const root = await fixture();
+    const scenario = join(root, "nul-argument.json");
+    await writeFile(
+      scenario,
+      JSON.stringify({ executable: process.execPath, arguments: ["\0"] }),
+    );
+
+    expect(await captureProcessScenarioFile(scenario)).toMatchObject({
+      error: "Process command failed",
+      code: "invalid_request",
+      category: "invalid_input",
+      details: {
+        operation: "capture_process_scenario",
+        issues: [
+          {
+            path: ["arguments", 0],
+            reason: "invalid_format",
+            expected: "regex",
+            message:
+              "Values passed to operating-system APIs cannot contain NUL",
+          },
+        ],
+      },
+    });
+  });
+});
+
+describe("process CLI environment key diagnostics", () => {
+  it("reports the reserved process environment key constraint", async () => {
+    const root = await fixture();
+    const scenario = join(root, "reserved-environment.json");
+    await writeFile(
+      scenario,
+      JSON.stringify({
+        executable: process.execPath,
+        environment: { REA_PROCESS_RUN_ID: "caller-value" },
+      }),
+    );
+
+    expect(await captureProcessScenarioFile(scenario)).toMatchObject({
+      error: "Process command failed",
+      code: "invalid_request",
+      category: "invalid_input",
+      details: {
+        operation: "capture_process_scenario",
+        issues: [
+          {
+            path: ["environment", "REA_PROCESS_RUN_ID"],
+            reason: "invalid_format",
+            expected: "regex",
+            message: "REA_PROCESS_RUN_ID is reserved by the process adapter",
+          },
+        ],
+      },
+    });
+  });
+});
+
+describe("process CLI evidence validation", () => {
   it("captures the minimal executable-and-arguments scenario", async () => {
     const root = await fixture();
     const scenario = join(root, "scenario.json");
@@ -217,11 +293,62 @@ describe("process CLI errors", () => {
     const malformed = join(root, "malformed-evidence.json");
     await writeFile(malformed, "{}");
 
-    expect(await compareProcessEvidenceFiles(malformed, malformed)).toEqual({
+    expect(
+      await compareProcessEvidenceFiles(malformed, malformed),
+    ).toMatchObject({
       error: "Process command failed",
       category: "invalid_input",
-      message:
-        "Capture evidence is malformed. Create new capture evidence, then try again.",
+      code: "invalid_request",
+      details: {
+        operation: "compare_process_captures",
+        issues: expect.arrayContaining([
+          expect.objectContaining({
+            path: ["parameters"],
+            reason: "missing_argument",
+          }),
+        ]),
+      },
     });
   });
 });
+
+it(
+  "reports the JSON depth constraint through the compiled comparison CLI",
+  async () => {
+    const root = await fixture();
+    const left = join(root, "left.json");
+    const right = join(root, "right.json");
+    const input = INVESTIGATION_EXAMPLES.compare_process_captures.input;
+    await writeFile(left, JSON.stringify(input.left));
+    await writeFile(right, JSON.stringify(input.right));
+    const cli = fileURLToPath(
+      new URL("../../../scripts/rea.mjs", import.meta.url),
+    );
+    const cliArguments = [
+      cli,
+      "compare-process-captures",
+      left,
+      right,
+      "--json",
+    ];
+    const baseline = await execFileAsync(process.execPath, cliArguments);
+    expect(JSON.parse(baseline.stdout)).toMatchObject({
+      operation: "compare_process_captures",
+    });
+    const nested = '{"nested":'.repeat(10_000) + "1" + "}".repeat(10_000);
+    await writeFile(
+      left,
+      JSON.stringify({
+        ...input.left,
+        parameters: { attack: "depth-placeholder" },
+      }).replace('"depth-placeholder"', nested),
+    );
+    await expect(
+      execFileAsync(process.execPath, cliArguments),
+    ).rejects.toMatchObject({
+      code: 1,
+      stdout: expect.stringContaining("maximum nesting depth"),
+    });
+  },
+  CLI_INTEGRATION_TIMEOUT_MS,
+);

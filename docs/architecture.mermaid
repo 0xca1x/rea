@@ -26,11 +26,13 @@ graph TD
     end
 
     subgraph "Provider Layers"
+        PWNTOOLS["src/native/pwntools/ + src/native/pwndbg/<br/>BYO offline ELF/core adapters<br/>owned snapshots/Python and optional core-only GDB<br/>unchanged upstream parsers, ABI structures and mapping API"]
+        EVM["src/evm/<br/>unchanged EVMole/WASM in bounded owned worker<br/>explicit carrier parsing and inferred interface adapter"]
         HOPPER["src/hopper/<br/>Hopper launch & Unix-socket protocol<br/>BridgeLauncher, HopperClient, protocol"]
         GHIDRA["src/ghidra/<br/>Ghidra discovery, profile & function analysis<br/>snapshot, Unix/Windows transport, bounded lifecycle"]
         IDA["src/ida/<br/>Upstream MCP contract adaptation<br/>live GUI binding or owned headless database"]
         IDA_MCP["External ida-pro-mcp<br/>GUI proxy or database supervisor<br/>upstream installation and engine lifecycle"]
-        AUX["src/artifacts/ + src/native/<br/>disjoint artifact and native capabilities"]
+        AUX["src/artifacts/ + src/native/<br/>artifact inventory and extraction<br/>format readers and native capabilities"]
         BROWSER["src/browser/<br/>CDP / Playwright capture<br/>captured scripts and native module resolution<br/>execution/: coverage, listener and source attribution"]
         JS_CODEC["src/javascript/sourceMaps/<br/>pinned upstream map codec<br/>owned heap-limited Node process, complete point evidence"]
         INSPECTOR["src/inspector/<br/>passive V8 Inspector discovery and capture<br/>script and target locations"]
@@ -92,6 +94,9 @@ graph TD
     APP -->|record callbacks| RECORDS
     SERVER -->|narrow record ports| RECORDS
     RECORDS --> DOMAIN
+    COMPOSITION --> PWNTOOLS
+    PWNTOOLS --> PROCESS
+    PWNTOOLS --> DOMAIN
     COMPOSITION --> HOPPER
     COMPOSITION --> GHIDRA
     COMPOSITION --> IDA
@@ -140,3 +145,8 @@ graph TD
     TESTS -.-> BROWSER
     TESTS -.-> EVALUATION
     TESTS -.-> ERRORS
+
+    COMPOSITION --> EVM
+    APP -->|EVM interface port| EVM
+    EVM --> PROCESS
+    EVM --> DOMAIN

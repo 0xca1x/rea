@@ -1,9 +1,16 @@
 # REA website
 
-An English static website with explanatory figures, worked guides and DX-Ball, Notion and TH04 investigations.
+> A good website is like a good paper: easy to follow, clear and concise, with a clean, refined presentation.
+>
+> — N0zoM1z0
+
+An English static website with explanatory figures, worked guides and DX-Ball, Notion, TH04 and CTF investigations.
 The public files are in `website/public/`. The site uses HTML, CSS and a small
 script for copying code and following the assembly-to-C comparison. Python
 packages the downloadable example; there is no frontend bundler or npm dependency.
+
+[style-guide.md](style-guide.md) explains the writing, page structure, figures,
+visual system and review process. Read it before adding or revising a page.
 
 ## Local preview
 
@@ -23,7 +30,9 @@ Open <http://127.0.0.1:4173/>. Refresh the browser after editing a file.
 - `public/showcase/dx-ball/index.html`: sound-pan investigation and project status.
 - `public/showcase/notion/index.html`: Notion's Electron clipboard bridge and rich clipboard format.
 - `public/showcase/th04/index.html`: TH04's 16-bit DOS bullet-angle calculation and compiler checks.
+- `public/showcase/ctf/index.html`: DownUnderCTF's masked-squares flag checker, extracted equations and real process captures.
 - `public/get-started/index.html`: agent setup, first CLI result and provider guides.
+- `public/faq/index.html`: concise answers about setup, updates, analysis and troubleshooting.
 - `public/guides/`: a guide hub and native, JavaScript/Electron and browser examples.
 - `public/examples/`: downloadable Electron source and an interactive Notes browser app.
 - `public/assets/`: shared styles, interactions, favicon and explanatory figures.
@@ -57,6 +66,18 @@ respecting reduced-motion preferences. Both the prompt and animation work
 without JavaScript. The homepage and agent setup section share a copyable
 installation prompt; setup still presents its plan for approval.
 
+Reading pages share a small `↑ Top` link at the bottom right. It appears after
+scrolling and returns to the page header, with smooth scrolling when reduced
+motion is disabled. Keyboard activation returns focus to the first navigation
+link. Without JavaScript, the link stays visible and uses its `#top` anchor.
+
+The FAQ uses native `<details>` for its answers. Keep replies short and link to
+on-site guides for the next step. Individual answers have stable fragment IDs;
+the shared script opens an answer when its fragment is visited. The questions
+and disclosure controls remain usable without JavaScript. Check FAQ commands
+and support statements against the English README and relevant guides when
+updating them.
+
 DX-Ball figures and findings refer to the linked 7 October 2026 checkpoint,
 commit `a55dca27ec0a07018c1b2c95ae2be027f7d8c3c4`. Update those links and figures
 together when moving to another checkpoint. Case-study source excerpts come
@@ -78,7 +99,8 @@ code; the scoped lint override admits `require` only in that example directory.
 
 The Notion case follows the same HTML figure style. Its short excerpts explain
 the packaged clipboard bridge; separate web-cache probes illustrate the rich
-clipboard and Markdown formats. Only selected source details and generic
+clipboard format, with Markdown tables available as an additional example in
+collapsed details. Only selected source details and generic
 example data belong on the site. Machine paths, account identifiers, local
 configuration, complete vendor bundles and raw captured results stay outside
 the website.
@@ -93,6 +115,20 @@ fixed and aimed rings. [evidence/th04-bullet-ring.md](evidence/th04-bullet-ring.
 records the fresh load-image/function evidence and separately credited TH04
 source and historical compiler replay. The figure illustrates the calculation;
 original game assets and executable bytes are not website downloads.
+
+## CTF case study
+
+The DownUnderCTF 2023 case follows the official `ms_flag_checker` handout from
+prompt references to checking functions, compressed masks, equations and an
+accepted flag. [evidence/ctf-masked-squares.md](evidence/ctf-masked-squares.md)
+records the REA analysis, extracted data and positive/negative process captures.
+The downloadable `public/showcase/ctf/solve.py` uses Python and `z3-solver`;
+its constants come from REA's byte reads. The original executable stays in the
+organizers' repository and is linked from the page.
+
+The mask SVG is drawn from the seventh decoded mask. It selects zero-based
+position 21 and compares its character code with 55 (`7`). Keep the figure,
+solver constants and evidence notes aligned when changing this case.
 
 ## GitHub Pages
 

@@ -2,6 +2,7 @@ import canonicalize from "canonicalize";
 
 import {
   createEvidenceBundle,
+  describeEvidenceBundleFailure,
   parseEvidenceBundle,
   validateResidualUnknownAddition,
   type EvidenceBundle,
@@ -27,6 +28,7 @@ export interface EvidenceImportDelta {
   readonly recordsAdded: number;
   readonly unknownsAdded: number;
   readonly changed: boolean;
+  readonly metadataChanged: boolean;
 }
 
 type ImportResult = Result<EvidenceImportDelta, EvidenceLedgerFailure>;
@@ -67,14 +69,54 @@ export class EvidenceLedger {
       return err(
         new EvidenceIntegrityError("Evidence bundle validation failed", {
           cause,
+          userMessage: describeEvidenceBundleFailure(input, cause),
         }),
       );
     }
+    // A record-only bundle cannot change the already-valid unknown graph. The
+    // bundle parser has validated every incoming record and its manifests, so
+    // checking ID conflicts and committing only the additions preserves the
+    // atomic merge without rebuilding and reparsing the entire ledger.
+    if (bundle.unknowns.length === 0) {
+      const additions = new Map<string, Evidence>();
+      const replacements = new Map<string, Evidence>();
+      let metadataChanged = false;
+      for (const evidence of bundle.records) {
+        const existing = this.#records.get(evidence.evidence_id);
+        if (existing !== undefined) {
+          if (!recordsAgree(existing, evidence))
+            return err(
+              new EvidenceIntegrityError("Conflicting evidence record"),
+            );
+          if (canonicalize(existing) !== canonicalize(evidence)) {
+            replacements.set(evidence.evidence_id, evidence);
+            metadataChanged = true;
+          }
+          continue;
+        }
+        additions.set(evidence.evidence_id, evidence);
+      }
+      for (const [id, evidence] of replacements)
+        this.#records.set(id, evidence);
+      for (const [id, evidence] of additions) this.#records.set(id, evidence);
+      return ok({
+        recordsAdded: additions.size,
+        unknownsAdded: 0,
+        changed: additions.size > 0 || metadataChanged,
+        metadataChanged,
+      });
+    }
     const pending = new Map(this.#records);
+    let metadataChanged = false;
     for (const evidence of bundle.records) {
       const existing = pending.get(evidence.evidence_id);
       if (existing !== undefined && !recordsAgree(existing, evidence))
         return err(new EvidenceIntegrityError("Conflicting evidence record"));
+      if (
+        existing !== undefined &&
+        canonicalize(existing) !== canonicalize(evidence)
+      )
+        metadataChanged = true;
       pending.set(evidence.evidence_id, evidence);
     }
     const pendingUnknowns = new Map(this.#unknownRevisions);
@@ -108,7 +150,8 @@ export class EvidenceLedger {
     return ok({
       recordsAdded: added,
       unknownsAdded,
-      changed: added > 0 || unknownsAdded > 0,
+      changed: added > 0 || unknownsAdded > 0 || metadataChanged,
+      metadataChanged,
     });
   }
 

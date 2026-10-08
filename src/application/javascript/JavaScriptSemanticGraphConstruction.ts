@@ -4,6 +4,7 @@ import { javascriptDisplayText } from "../../domain/javascript/javascriptAstValu
 import {
   createJavaScriptSemanticGraphNode,
   createJavaScriptSemanticGraphRelation,
+  javaScriptSemanticNodeId,
   type JavaScriptSemanticGraphNode,
 } from "../../domain/javascript/javascriptSemanticGraph.js";
 import type { ApplicationGraphEvidence } from "../../domain/javascript/javascriptApplicationEvidenceSchemas.js";
@@ -26,6 +27,24 @@ export interface SemanticGraphProjectionState {
   readonly unknowns: Map<string, JavaScriptSemanticGraphUnknown>;
   readonly roots: Set<string>;
   readonly applicationNodeIdsByLocation: ReadonlyMap<string, readonly string[]>;
+  /**
+   * Remaining node budget for the file currently being projected.
+   *
+   * The projection emits one node per AST expression, call site, binding and
+   * property slot, which is unbounded in file size: one bundled vendor library
+   * measured 135,286 nodes on its own. `null` means unbounded; a number is the
+   * number of nodes this file may still add. Exhausting it stops node creation
+   * for that file and is reported through the graph's `coverage` fields.
+   */
+  fileNodeBudget?: number | null;
+  /**
+   * Whether the file currently being projected lost any nodes to its budget.
+   *
+   * A file that exactly fills its share ends with a zero budget without
+   * dropping anything, so callers must consult this flag rather than the
+   * remaining budget to decide whether coverage is truncated.
+   */
+  fileNodesDropped?: boolean;
 }
 
 /** Input for one exact artifact-version semantic node. */
@@ -62,6 +81,28 @@ export const createSemanticGraphProjectionState = (
   };
 };
 
+/** Bind retained semantic identities after all application observations exist. */
+export const bindSemanticGraphApplicationNodes = (
+  state: SemanticGraphProjectionState,
+  applicationGraph: Pick<JavaScriptApplicationGraph, "nodes">,
+): void => {
+  const index = indexApplicationNodes(applicationGraph.nodes).identifiers;
+  for (const [identifier, node] of state.nodes) {
+    state.nodes.set(identifier, {
+      ...node,
+      application_node_ids: [
+        ...(index.get(
+          applicationLocationKey(
+            node.identity.artifact_sha256,
+            node.identity.module_path,
+            node.identity.source_range,
+          ),
+        ) ?? []),
+      ],
+    });
+  }
+};
+
 /** Construct one canonical semantic node backed by an exact artifact file. */
 export const constructSemanticGraphNode = (
   file: JavaScriptArtifactFile,
@@ -83,6 +124,33 @@ export const constructSemanticGraphNode = (
     evidence: observedSemanticEvidence(file, input.location),
   });
 
+/** Reuse retained identities and reject exhausted budgets before allocation. */
+export const retainSemanticGraphNode = (
+  state: SemanticGraphProjectionState,
+  file: JavaScriptArtifactFile,
+  input: SemanticNodeConstructionInput,
+): JavaScriptSemanticGraphNode | null => {
+  const identifier = javaScriptSemanticNodeId({
+    kind: input.kind,
+    identity: {
+      artifact_sha256: file.sha256,
+      module_path: file.path,
+      source_range: input.location,
+      role_key: input.roleKey,
+    },
+  });
+  const existing = state.nodes.get(identifier);
+  if (existing !== undefined) return existing;
+  if (typeof state.fileNodeBudget === "number" && state.fileNodeBudget <= 0) {
+    state.fileNodesDropped = true;
+    return null;
+  }
+  return addSemanticGraphNode(
+    state,
+    constructSemanticGraphNode(file, input, state),
+  );
+};
+
 /** Retain one canonical semantic node. */
 export const addSemanticGraphNode = (
   state: SemanticGraphProjectionState,
@@ -90,6 +158,14 @@ export const addSemanticGraphNode = (
 ): JavaScriptSemanticGraphNode | null => {
   const existing = state.nodes.get(node.node_id);
   if (existing !== undefined) return existing;
+  const budget = state.fileNodeBudget;
+  if (typeof budget === "number") {
+    if (budget <= 0) {
+      state.fileNodesDropped = true;
+      return null;
+    }
+    state.fileNodeBudget = budget - 1;
+  }
   state.nodes.set(node.node_id, node);
   return node;
 };

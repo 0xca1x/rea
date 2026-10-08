@@ -3,6 +3,7 @@ import { homedir } from "node:os";
 import { resolve } from "node:path";
 
 import { PRODUCT_IDENTITY } from "../identity.js";
+import { npxRegistrationCommand } from "./ClientRegistrationIdentity.js";
 import {
   SUPPORTED_NODE_VERSION_PROSE,
   supportsNodeVersion,
@@ -35,7 +36,7 @@ export const setupRegistrationCommand = (
   useNpmRunner: boolean = process.env.npm_command === "exec",
 ): readonly string[] =>
   useNpmRunner
-    ? PRODUCT_IDENTITY.mcpCommand.split(" ")
+    ? npxRegistrationCommand(platform)
     : platform === "win32"
       ? [
           process.execPath,
@@ -82,7 +83,7 @@ export const hostRemediation = async (
       : undefined;
   }
   if ((await host.linuxDistribution())?.supported === true) return undefined;
-  return "Automated Hopper setup supports Ubuntu 24.04+, Fedora 41+, and 64-bit Arch Linux; configure an existing supported provider instead.";
+  return "Automated Hopper setup supports Ubuntu 24.04+, Fedora 41+, 64-bit Arch Linux, and CachyOS; configure an existing supported provider instead.";
 };
 
 /** Production setup effects for Hopper, agent configuration, and the canonical skill directory. */

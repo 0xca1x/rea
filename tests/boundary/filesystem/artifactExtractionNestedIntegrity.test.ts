@@ -1,10 +1,11 @@
+import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { createPackage } from "@electron/asar";
 import { expect, it } from "vitest";
 
-import { extractArtifact } from "../../../src/application/ArtifactExtraction.js";
+import { extractArtifact } from "../../../src/artifacts/extraction/ArtifactExtraction.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
 it("does not claim unmaterialized nested integrity contradictions were extracted", async () => {
@@ -35,7 +36,14 @@ it("does not claim unmaterialized nested integrity contradictions were extracted
   expect(result.artifacts.map(({ relative_path }) => relative_path)).toEqual([
     "app.asar",
   ]);
-  expect(result.integrity_contradictions).toEqual([]);
+  expect(result.integrity_contradictions).toEqual([
+    expect.objectContaining({
+      logical_path: "app.asar/main.js",
+      declared_sha256: createHash("sha256").update(original).digest("hex"),
+      observed_sha256: createHash("sha256").update(changed).digest("hex"),
+      trust: "observed-untrusted",
+    }),
+  ]);
   expect(result.limitations.join("\n")).toContain(
     "were not written as their own files",
   );

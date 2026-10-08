@@ -4,7 +4,7 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
+    branches: [main, "release/*"]
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -102,6 +102,8 @@ jobs:
         with:
           name: rea-dist
           path: dist
+      - name: Generate source catalog from downloaded build
+        run: node scripts/generate-mcp-tool-catalog.mjs
       - run: npm run test:ci:shard:run -- --shard=${{ matrix.shard }}
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
@@ -229,7 +231,16 @@ jobs:
         with:
           node-version-file: .nvmrc
       - name: Prepare cross compiler
-        run: sudo apt-get update && sudo apt-get install --no-install-recommends -y g++-mingw-w64-x86-64
+        run: |
+          # Slow Azure archive transfers can exhaust the job before compilation.
+          # Keep the same signed packages and avoid slow HTTP mirror fallback.
+          for source in /etc/apt/apt-mirrors.txt /etc/apt/sources.list /etc/apt/sources.list.d/ubuntu.sources; do
+            if [ -f "$source" ]; then
+              sudo sed -i 's|azure.archive.ubuntu.com|archive.ubuntu.com|g; s|http://archive.ubuntu.com|https://archive.ubuntu.com|g' "$source"
+            fi
+          done
+          sudo apt-get update
+          sudo apt-get install --no-install-recommends -y g++-mingw-w64-x86-64
       - run: npm run build:windows-native
       - run: npm run verify:windows-native:artifact
       - uses: actions/upload-artifact@v4
@@ -306,14 +317,18 @@ jobs:
       - run: npm run verify:keyed-archive
       - run: npm run verify:asset-catalog
       - run: npm run verify:macos-bundle
-      - name: Native compiled NIB hierarchy regressions
-        run: npm run test:focused -- tests/boundary/filesystem/nibNativeHierarchy.test.ts tests/boundary/filesystem/interfaceBuilderBundle.test.ts
+      - name: Native installer and compiled NIB hierarchy regressions
+        run: npm run test:focused -- tests/boundary/filesystem/installScript.test.ts tests/boundary/filesystem/nibNativeHierarchy.test.ts tests/boundary/filesystem/interfaceBuilderBundle.test.ts
       - name: Real binary metadata and Interface Builder integration
         run: npm run verify:apple-dispatch && npm run verify:interface-builder
       - name: Native plist CLI selection regressions
         run: npm run test:focused -- tests/boundary/cli/nativePlistCli.test.ts tests/boundary/cli/nativePlistPrototypeKeyCli.test.ts tests/boundary/cli/nativePlistSelectionFailureCli.test.ts
       - name: Native Swift demangling CLI and MCP regressions
         run: npm run test:focused -- tests/boundary/cli/nativeDemangleCli.test.ts tests/boundary/mcp/nativeDemangleMcp.test.ts
+      - name: Process filesystem snapshot descriptor regressions
+        run: npm run test:focused -- src/process/capture/FilesystemSnapshot.test.ts
+      - name: Native Darwin ownership and process cleanup regressions
+        run: npm run test:focused -- tests/boundary/process/darwinProcessRunTokenReader.test.ts tests/boundary/process/processCaptureLifecycle.test.ts tests/boundary/cli/processCli.test.ts tests/boundary/mcp/sessionMcp.test.ts
 
   reconstruction-readiness:
     name: Reconstruction readiness
@@ -428,12 +443,16 @@ jobs:
           tests/boundary/filesystem/safeOutputTree.test.ts
           tests/boundary/providers/native/artifactProvider.archiveSafety.test.ts
           tests/boundary/filesystem/setupUnavailableProvider.test.ts
+          tests/boundary/filesystem/windowsNpxRegistration.test.ts
+          src/application/ClientRegistrationIdentity.test.ts
+          tests/boundary/filesystem/webScriptManifestPaths.test.ts
+          tests/acceptance/webModuleCli.test.ts
+          tests/acceptance/webSourceLocationCli.test.ts
           tests/boundary/cli/referenceSourceImportStatus.test.ts
           src/cliReferenceSourceImportStatus.test.ts
           tests/boundary/filesystem/asarInventoryFreshness.test.ts
           tests/composition/javascript-applications/javascriptArtifactReconstruction.test.ts
           tests/conformance/providers/ghidra/windowsCapabilities.test.ts
-          tests/conformance/providers/ghidra/ghidraWindowsFixture.test.ts
           src/ghidra/GhidraInstallation.test.ts
           tests/boundary/providers/ghidra/ghidraTransport.test.ts
           tests/boundary/providers/ghidra/ghidraTargetSnapshot.test.ts
@@ -469,3 +488,13 @@ jobs:
           cache: npm
       - run: npm ci
       - run: npm run docs:check
+      - name: Generation leaves authored files unchanged
+        run: git diff --exit-code
+      - uses: actions/upload-artifact@v4
+        with:
+          name: generated-docs
+          path: |
+            docs/public/product-catalog.json
+            docs/verification/managed-conformance-*.json
+            skills/reverse-engineer-anything
+          if-no-files-found: error

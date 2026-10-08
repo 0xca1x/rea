@@ -6,36 +6,7 @@ import {
 import { parseProcessEnvironment } from "./ProcessOwnershipObservation.js";
 import { selectCapturedProcessGroupIds } from "./ProcessOwnershipProcessTree.js";
 import { matchesOwnedProcessCommand } from "./ProcessCommandIdentity.js";
-const ownership = {
-  runId: "run-token",
-  leaderPid: 100,
-  processGroupId: 100,
-};
-const host = (
-  environments: Readonly<Record<number, Readonly<Record<string, string>>>>,
-): {
-  readonly adapter: ProcessOwnershipHost;
-  readonly signalGroup: ReturnType<typeof vi.fn>;
-} => {
-  const signalGroup = vi.fn();
-  return {
-    adapter: {
-      listProcesses: () =>
-        Promise.resolve(
-          Object.keys(environments).map((pid) => ({
-            pid: Number(pid),
-            parentPid: Number(pid) === 100 ? 1 : 100,
-            processGroupId: 100,
-            state: "S",
-            command: "fixture",
-          })),
-        ),
-      environment: (pid) => Promise.resolve(environments[pid] ?? {}),
-      signalGroup,
-    },
-    signalGroup,
-  };
-};
+import { host, ownership } from "./ProcessOwnership.fixture.js";
 describe("owned process-group cleanup discovery", () => {
   it("excludes sampled groups whose leader was outside the captured tree", () => {
     expect(
@@ -93,6 +64,312 @@ describe("owned process-group cleanup discovery", () => {
     });
     expect(signalGroup).toHaveBeenCalledWith(100, "SIGKILL");
   });
+});
+
+describe("opaque process neighbors during cleanup", () => {
+  it("cleans verified run-owned groups and records a withheld unrelated neighbor", async () => {
+    const processes = [
+      { pid: 100, parentPid: 1, processGroupId: 100, command: "capture" },
+      {
+        pid: 200,
+        parentPid: 1,
+        processGroupId: 200,
+        command: "detached-child",
+      },
+      {
+        pid: 900,
+        parentPid: 1,
+        processGroupId: 900,
+        command: "/usr/bin/opaque-neighbor",
+      },
+    ].map((process) => ({ ...process, state: "S" }));
+    const signalGroup = vi.fn();
+    const identities = new Map(
+      processes.map(({ pid }) => [
+        pid,
+        { state: "readable" as const, identity: `start-${String(pid)}` },
+      ]),
+    );
+    const adapter: ProcessOwnershipHost = {
+      platform: "darwin",
+      listProcesses: () => Promise.resolve(processes),
+      environment: (pid) =>
+        Promise.resolve({
+          REA_PROCESS_RUN_ID: pid === 900 ? "unowned" : "run-token",
+        }),
+      processIdentities: () => Promise.resolve(identities),
+      runTokens: (members) =>
+        Promise.resolve(
+          new Map(
+            members.map(({ pid }) => [
+              pid,
+              pid === 900
+                ? {
+                    state: "unavailable" as const,
+                    reason: "platform_binary_environment_withheld",
+                  }
+                : { state: "readable" as const, runId: "run-token" },
+            ]),
+          ),
+        ),
+      signalGroup,
+    };
+
+    const result = await cleanupOwnedProcessGroup(
+      {
+        ...ownership,
+        sweepTokenOwnedProcesses: true,
+        captureBaseline: [],
+      },
+      adapter,
+    );
+
+    expect(result).toMatchObject({
+      cleaned: true,
+      signaled: true,
+      unverified: [
+        { pid: 900, diagnostic: "platform_binary_environment_withheld" },
+      ],
+    });
+    expect(signalGroup.mock.calls).toEqual([
+      [100, "SIGKILL"],
+      [200, "SIGKILL"],
+    ]);
+    expect(signalGroup).not.toHaveBeenCalledWith(900, "SIGKILL");
+  });
+
+  it("fails closed for an unrelated unreadable candidate the OS should expose", async () => {
+    const processes = [
+      { pid: 100, parentPid: 1, processGroupId: 100, command: "capture" },
+      {
+        pid: 900,
+        parentPid: 1,
+        processGroupId: 900,
+        command: "opaque-neighbor",
+      },
+    ].map((process) => ({ ...process, state: "S" }));
+    const signalGroup = vi.fn();
+    const identities = new Map(
+      processes.map(({ pid }) => [
+        pid,
+        { state: "readable" as const, identity: `start-${String(pid)}` },
+      ]),
+    );
+    const adapter: ProcessOwnershipHost = {
+      platform: "darwin",
+      listProcesses: () => Promise.resolve(processes),
+      environment: (pid) =>
+        Promise.resolve({
+          REA_PROCESS_RUN_ID: pid === 900 ? "unowned" : "run-token",
+        }),
+      processIdentities: () => Promise.resolve(identities),
+      runTokens: (members) =>
+        Promise.resolve(
+          new Map(
+            members.map(({ pid }) => [
+              pid,
+              pid === 900
+                ? {
+                    state: "unavailable" as const,
+                    reason: "environment_unavailable",
+                  }
+                : { state: "readable" as const, runId: "run-token" },
+            ]),
+          ),
+        ),
+      signalGroup,
+    };
+
+    const result = await cleanupOwnedProcessGroup(
+      {
+        ...ownership,
+        sweepTokenOwnedProcesses: true,
+        captureBaseline: [],
+      },
+      adapter,
+    );
+
+    expect(result).toMatchObject({
+      cleaned: false,
+      reason: expect.stringContaining("environment_unavailable=1"),
+    });
+    expect(signalGroup.mock.calls).toEqual([[100, "SIGKILL"]]);
+    expect(signalGroup).not.toHaveBeenCalledWith(900, "SIGKILL");
+  });
+});
+
+describe("related sweep candidates during cleanup", () => {
+  it.each(["environment_unavailable", "platform_binary_environment_withheld"])(
+    "fails closed for a related candidate with %s",
+    async (diagnostic) => {
+      const processes = [
+        {
+          pid: 100,
+          parentPid: 1,
+          processGroupId: 100,
+          state: "S",
+          command: "capture",
+        },
+        {
+          pid: 101,
+          parentPid: 100,
+          processGroupId: 100,
+          state: "S",
+          uid: process.getuid?.() === 0 ? 1 : 0,
+          command: "ready-hang",
+        },
+      ];
+      const signalGroup = vi.fn();
+      const identities = new Map(
+        processes.map(({ pid }) => [
+          pid,
+          { state: "readable" as const, identity: `start-${String(pid)}` },
+        ]),
+      );
+      const adapter: ProcessOwnershipHost = {
+        listProcesses: () => Promise.resolve(processes),
+        environment: (pid) =>
+          pid === 100
+            ? Promise.resolve({ REA_PROCESS_RUN_ID: "run-token" })
+            : Promise.reject(new Error("EACCES: permission denied")),
+        processIdentities: () => Promise.resolve(identities),
+        runTokens: (members) =>
+          Promise.resolve(
+            new Map(
+              members.map(({ pid }) => [
+                pid,
+                pid === 100
+                  ? { state: "readable" as const, runId: "run-token" }
+                  : {
+                      state: "unavailable" as const,
+                      reason: diagnostic,
+                    },
+              ]),
+            ),
+          ),
+        signalGroup,
+      };
+
+      const result = await cleanupOwnedProcessGroup(
+        {
+          ...ownership,
+          sweepTokenOwnedProcesses: true,
+          captureBaseline: [],
+        },
+        adapter,
+      );
+
+      expect(result).toMatchObject({
+        cleaned: false,
+        reason: expect.stringContaining(
+          "process ownership token could not be read",
+        ),
+      });
+      expect(signalGroup).not.toHaveBeenCalled();
+    },
+  );
+});
+
+describe("sampled detached process groups during cleanup", () => {
+  it("signals only token-authenticated sampled groups and reports an unowned sample", async () => {
+    const processes = [
+      {
+        pid: 100,
+        parentPid: 1,
+        processGroupId: 100,
+        state: "S",
+        command: "capture",
+      },
+      {
+        pid: 200,
+        parentPid: 1,
+        processGroupId: 200,
+        state: "S",
+        command: "sanitized-detached-child",
+      },
+    ];
+    const signalGroup = vi.fn();
+    const identities = new Map([
+      [100, { state: "readable" as const, identity: "start-100" }],
+      [200, { state: "readable" as const, identity: "start-200" }],
+    ]);
+    const adapter: ProcessOwnershipHost = {
+      listProcesses: () => Promise.resolve(processes),
+      environment: (pid) =>
+        Promise.resolve(pid === 100 ? { REA_PROCESS_RUN_ID: "run-token" } : {}),
+      processIdentities: () => Promise.resolve(identities),
+      runTokens: (members) =>
+        Promise.resolve(
+          new Map(
+            members.map(({ pid }) => [
+              pid,
+              {
+                state: "readable" as const,
+                runId: pid === 100 ? "run-token" : undefined,
+              },
+            ]),
+          ),
+        ),
+      signalGroup,
+    };
+
+    const result = await cleanupOwnedProcessGroup(
+      {
+        ...ownership,
+        sweepTokenOwnedProcesses: true,
+        sampledProcessGroupIds: [200],
+      },
+      adapter,
+    );
+
+    expect(result).toMatchObject({
+      cleaned: false,
+      reason: "process tree contains an unowned or PID-reused process",
+      failures: [{ pid: 200, reason: "run-token-mismatch" }],
+    });
+    expect(signalGroup).toHaveBeenCalledTimes(1);
+    expect(signalGroup).toHaveBeenCalledWith(100, "SIGKILL");
+    expect(signalGroup).not.toHaveBeenCalledWith(200, "SIGKILL");
+  });
+
+  it("reports a live sampled group after the launcher has exited without signaling it", async () => {
+    const process = {
+      pid: 200,
+      parentPid: 1,
+      processGroupId: 200,
+      state: "S",
+      command: "sanitized-detached-child",
+    };
+    const signalGroup = vi.fn();
+    const adapter: ProcessOwnershipHost = {
+      listProcesses: () => Promise.resolve([process]),
+      environment: () => Promise.resolve({}),
+      runTokens: () =>
+        Promise.resolve(
+          new Map([[200, { state: "readable" as const, runId: undefined }]]),
+        ),
+      signalGroup,
+    };
+
+    const result = await cleanupOwnedProcessGroup(
+      {
+        ...ownership,
+        sweepTokenOwnedProcesses: true,
+        sampledProcessGroupIds: [200],
+      },
+      adapter,
+    );
+
+    expect(result).toMatchObject({
+      cleaned: false,
+      reason: "process tree contains an unowned or PID-reused process",
+      failures: [{ pid: 200, reason: "run-token-mismatch" }],
+    });
+    expect(signalGroup).not.toHaveBeenCalled();
+  });
+});
+
+describe("rooted process-group cleanup", () => {
   it("validates and signals rooted descendant groups once, root first", async () => {
     const processes = [
       { pid: 100, parentPid: 1, processGroupId: 100 },

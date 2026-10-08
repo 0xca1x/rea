@@ -8,7 +8,11 @@ import { z } from "zod";
 import { createTestTempDirectory } from "../../../tests/fixtures/temporaryDirectory.js";
 import { projectAnalysisError } from "../../domain/analysisErrorProjection.js";
 import { analyzeJavaScriptApplication } from "./JavaScriptApplicationService.js";
-import { compareApplicationVersionsEvidence } from "./JavaScriptApplicationWorkflowService.js";
+import {
+  compareApplicationVersionsEvidence,
+  compareJavaScriptExportShapesEvidence,
+  traceApplicationFeatureEvidence,
+} from "./JavaScriptApplicationWorkflowService.js";
 
 describe("JavaScript application failure diagnostics", () => {
   it("identifies the rejected result field in caller-visible diagnostics", async () => {
@@ -49,6 +53,8 @@ describe("JavaScript application failure diagnostics", () => {
     const inputPath = await createTestTempDirectory("rea-js-failure-");
     await writeFile(join(inputPath, "main.js"), "export const value = 1;\n");
     const cause = new RangeError("Invalid string length");
+    // Retain the original failure locally, but never serialize its object graph.
+    cause.cause = cause;
     const result = await analyzeJavaScriptApplication(
       { input_path: inputPath, format: "directory" },
       {
@@ -74,6 +80,8 @@ describe("JavaScript application failure diagnostics", () => {
         },
       },
     });
+    const projection = projectAnalysisError(result.error);
+    expect(JSON.parse(JSON.stringify(projection))).toEqual(projection);
   });
 
   it("keeps filesystem failures distinct from engine failures", async () => {
@@ -121,10 +129,41 @@ describe("JavaScript application failure diagnostics", () => {
       });
     },
   );
+
+  it.each([new Error("x".repeat(10_000)), "y".repeat(10_000)])(
+    "preserves long failure messages through JSON projection (%#)",
+    async (cause) => {
+      const inputPath = await createTestTempDirectory("rea-js-oversized-");
+      await writeFile(join(inputPath, "main.js"), "export const value = 1;\n");
+      const message = cause instanceof Error ? cause.message : cause;
+      const result = await analyzeJavaScriptApplication(
+        { input_path: inputPath, format: "directory" },
+        {
+          progress: {
+            report: async (event) => {
+              if (event.terminal) throw cause;
+            },
+          },
+        },
+      );
+      expect(result.ok).toBe(false);
+      if (result.ok) throw new Error("Expected analysis failure");
+      expect(projectAnalysisError(result.error)).toMatchObject({
+        code: "execution_failure",
+        details: {
+          diagnostics: {
+            error_message: message,
+          },
+        },
+      });
+      const projection = projectAnalysisError(result.error);
+      expect(JSON.parse(JSON.stringify(projection))).toEqual(projection);
+    },
+  );
 });
 
 const CONTRADICTION_LIMITATION =
-  "Observed bytes of 1 artifact file(s) contradict declared integrity and are untrusted; contradicted nested archives were not expanded: addon.node.";
+  "Observed bytes of 1 artifact file(s) contradict declared integrity and are untrusted: addon.node.";
 
 describe("JavaScript application artifact integrity", () => {
   it("analyzes a signed-after-packaging native module only when the mismatch is recorded", async () => {
@@ -135,7 +174,10 @@ describe("JavaScript application artifact integrity", () => {
       join(source, "package.json"),
       '{"name":"signed","main":"main.js"}',
     );
-    await writeFile(join(source, "main.js"), "require('./addon.node');\n");
+    await writeFile(
+      join(source, "main.js"),
+      "require('./addon.node'); export function value() { return {status: 'ready'}; }\n",
+    );
     await writeFile(join(source, "addon.node"), "packed native bytes");
     const archive = join(root, "app.asar");
     await createPackageWithOptions(source, archive, { unpack: "*.node" });
@@ -194,6 +236,32 @@ describe("JavaScript application artifact integrity", () => {
     if (!comparison.ok) throw new Error("Expected comparison");
     expect(comparison.value.normalized_result).toMatchObject({
       coverage: { status: "partial", right_graph_status: "partial" },
+      limitations: expect.arrayContaining([CONTRADICTION_LIMITATION]),
+    });
+    const shapes = compareJavaScriptExportShapesEvidence({
+      left: clean.value,
+      right: recorded.value,
+      left_module_path: "main.js",
+      left_export_name: "value",
+      right_module_path: "main.js",
+      right_export_name: "value",
+    });
+    expect(shapes.ok).toBe(true);
+    if (!shapes.ok) throw shapes.error;
+    expect(shapes.value.normalized_result).toMatchObject({
+      coverage: { status: "partial" },
+      limitations: expect.arrayContaining([CONTRADICTION_LIMITATION]),
+    });
+    const trace = traceApplicationFeatureEvidence({
+      application: recorded.value,
+      seed: { kind: "string", value: "nonexistent-feature" },
+      direction: "outgoing",
+    });
+    expect(trace.ok).toBe(true);
+    if (!trace.ok) throw trace.error;
+    expect(trace.value.normalized_result).toMatchObject({
+      graph: null,
+      limitations: expect.arrayContaining([CONTRADICTION_LIMITATION]),
     });
   });
 });

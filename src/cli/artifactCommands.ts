@@ -1,7 +1,8 @@
 import { z } from "incur";
+import { artifactIntegrityPolicySchema } from "../domain/artifactGraph.js";
 
 import { runProviderAnalysis } from "../composition/directAnalysis.js";
-import { createArtifactExtractionDestination } from "../application/ArtifactExtractionDestination.js";
+import { createArtifactExtractionDestination } from "../application/artifacts/ArtifactExtractionDestination.js";
 import { logCliCommand } from "../cliLogging.js";
 import { CLI_COMMANDS } from "../cliCommandNames.js";
 import type { Logger } from "../logger.js";
@@ -15,6 +16,7 @@ export const registerArtifactCommands = (
   registerExtractionCommand(cli, logger);
   registerInterfaceBuilderCommand(cli, logger);
   registerAssetCatalogCommand(cli, logger);
+  registerDylibResolutionCommand(cli, logger);
   cli.command(CLI_COMMANDS.inspectKeyedArchive, {
     description:
       "Inspect a Foundation keyed archive as an object-reference graph",
@@ -51,6 +53,45 @@ export const registerArtifactCommands = (
             offset: options.offset,
             limit: options.limit,
             ...(options.root === undefined ? {} : { root: options.root }),
+          },
+          logger,
+        ),
+      ),
+  });
+};
+
+const registerDylibResolutionCommand = (
+  cli: CliInstance,
+  logger: Logger,
+): void => {
+  cli.command(CLI_COMMANDS.traceDylibResolution, {
+    description:
+      "Trace dyld load-path resolution for a Mach-O or every executable in an app bundle",
+    args: z.object({
+      path: z.string().describe("Mach-O file or Apple .app bundle path"),
+    }),
+    options: z.object({
+      root: z
+        .array(z.string())
+        .optional()
+        .describe(
+          "Process root relative to the bundle or the Mach-O's directory (repeatable)",
+        ),
+      architecture: z
+        .enum(["arm64", "arm64e", "x86_64"])
+        .optional()
+        .describe("Trace only this slice of each root"),
+    }),
+    run: ({ args, options }) =>
+      logCliCommand(logger, CLI_COMMANDS.traceDylibResolution, () =>
+        runProviderAnalysis(
+          args.path,
+          "trace_dylib_resolution",
+          {
+            ...(options.root === undefined ? {} : { roots: options.root }),
+            ...(options.architecture === undefined
+              ? {}
+              : { architecture: options.architecture }),
           },
           logger,
         ),
@@ -154,14 +195,10 @@ const registerExtractionCommand = (cli: CliInstance, logger: Logger): void => {
       path: z.string().describe("Application or package path"),
     }),
     options: z.object({
-      integrityPolicy: z
-        .enum(["fail", "record-and-continue"])
-        .default("fail")
-        .describe("Behavior when declared artifact integrity does not match"),
+      integrityPolicy: artifactIntegrityPolicySchema.describe(
+        "Behavior when declared artifact integrity does not match",
+      ),
     }),
-    alias: {
-      integrityPolicy: "integrity-policy",
-    },
     run: ({ args, options }) =>
       logCliCommand(logger, "extract-artifact", () =>
         runProviderAnalysis(
@@ -185,14 +222,10 @@ const registerInspectionCommand = (cli: CliInstance, logger: Logger): void => {
       path: z.string().describe("Application or package path"),
     }),
     options: z.object({
-      integrityPolicy: z
-        .enum(["fail", "record-and-continue"])
-        .default("fail")
-        .describe("Behavior when declared artifact integrity does not match"),
+      integrityPolicy: artifactIntegrityPolicySchema.describe(
+        "Behavior when declared artifact integrity does not match",
+      ),
     }),
-    alias: {
-      integrityPolicy: "integrity-policy",
-    },
     run: ({ args, options }) =>
       logCliCommand(logger, "inspect-artifact", () =>
         runProviderAnalysis(

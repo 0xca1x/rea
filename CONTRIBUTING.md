@@ -10,7 +10,7 @@ When adding or changing an MCP tool, follow the [tool design guide](docs/tool-de
 
 ## Development setup
 
-REA development requires Node.js 24.18.x and npm 11.16.x (pinned toolchain via `nvm use`; the supported runtime range is Node.js ^22.19 || ^24.11 || >=26, as the README badge states). Real-Hopper verification additionally requires either macOS 12+ or an officially supported Linux host (Ubuntu 24.04+, Fedora 41+, or 64-bit Arch) and an installed Hopper application. Linux demo verification uses its own private Xvfb display and does not require a desktop session. Run `nvm use` before installing dependencies.
+REA development requires Node.js 24.18.x and npm 11.16.x (pinned toolchain via `nvm use`; the supported runtime range is Node.js ^22.19 || ^24.11 || >=26, as the README badge states). Real-Hopper verification additionally requires either macOS 12+ or an officially supported Linux host (Ubuntu 24.04+, Fedora 41+, 64-bit Arch, or CachyOS) and an installed Hopper application. Linux demo verification uses its own private Xvfb display and does not require a desktop session. Run `nvm use` before installing dependencies.
 
 ```bash
 npm ci
@@ -28,19 +28,21 @@ Keep dependencies flowing inward through the existing domain, contracts, provide
 
 ## Documentation website
 
-The VitePress site uses the Markdown files in `docs/` and deploys to
-<https://morluto.github.io/rea/>. Run `npm run docs:dev` for live editing,
-`npm run docs:build` to check the production build and links, and
-`npm run docs:preview` to preview that build at `/rea/`.
+The VitePress site uses the Markdown files in `docs/`. Run `npm run docs:dev`
+for live editing, `npm run docs:build` to check the production build and
+links, and `npm run docs:preview` to preview that build at `/rea/`.
 
 Site navigation lives in `docs/.vitepress/config.ts`. Keep links to guides
 relative so they work on GitHub and the website; link to repository files
 outside `docs/` using their full GitHub URLs. Generated reference documents
-still use `npm run docs:generate`; `docs:build` only builds the website.
+use `npm run docs:generate`; `docs:build` generates them before building the website.
 
-The documentation workflow builds pull requests and deploys changes on `main`.
-The repository's **Settings → Pages → Build and deployment → Source** must be
-set to **GitHub Actions** before the first deployment.
+Pull requests run `npm run docs:check`. `.github/workflows/pages.yml` is a
+manual VitePress build and does not publish. The public site at
+<https://morluto.github.io/rea/> is published only by the manual website
+workflow on `main`. The repository's **Settings → Pages → Build and
+deployment → Source** must be set to **GitHub Actions** before the first
+deployment.
 
 ## Development feedback and PR verification
 
@@ -72,8 +74,24 @@ require the matching real-provider `verify:*` lane.
 Formatting uses Oxfmt and the committed `.oxfmtrc.json`; generated sources use
 the same configuration. Pre-commit formats and lints staged files; pre-push runs
 `check:fast`.
-`docs:check` checks committed generated metadata. `docs:generate` regenerates
-those files, and the docs CI lane checks them.
+`docs:check` builds and validates generated metadata for the current checkout.
+The product catalog (`docs/public/product-catalog.json`), portable managed
+conformance projections (`docs/verification/managed-conformance-*.json`), and
+packaged skill (`skills/`) are ignored build outputs. Edit skill instructions
+and references in `skill-src/`; the build adds catalog-dependent metadata to
+the packaged copy without rewriting authored files. The generated manifest
+commits to that exact packaged skill bundle. It is a portable projection of
+the deterministic managed verifier, not a record of optional real-provider runs.
+CI validates these outputs and retains them as artifacts instead of pushing
+generated-only commits onto feature branches. Reviewed source metadata such as
+`src/generatedPackageMetadata.ts` and `docs/error-contract.schema.json` remains
+tracked and checked for freshness. Do not commit ignored generated outputs.
+The build-generated product catalog contains documented facts and their provider
+identity, rather than full runtime schema hashes. The managed skill contains
+instructions and inventory metadata; doctor compares its installed files with
+the canonical bundle. Schema-only fixes should not change these outputs or the
+skill commitment in the conformance manifest. Runtime schema identity remains
+available through doctor and `binary_session`.
 Real-provider execution remains uncached; deterministic builds use Turbo.
 
 Local `npm test` runs every deterministic Vitest project without coverage or
@@ -120,32 +138,14 @@ Describe the behavior change and verification performed in the pull request. Nev
 
 ## Maintainer release checklist
 
-Run `npm run check:pr`, the isolated package verifier, package dry run, and two-target real-Hopper verifier described above. Build a local tarball and exercise the executable through the package boundary:
+Use the [checkpoint release guide](docs/releasing.md). Releases start from an
+explicit `release/VERSION` branch cut at a recorded commit. Manually prepare
+the bot PR, wait for its exact-head CI and review, merge into that frozen
+branch, and manually publish through the official Release workflow. Main
+pushes do not update release PRs or publish packages. Both publishers build
+the exact SHA tagged by Release Please.
 
-```bash
-npm pack
-```
-
-Use the exact filename printed by `npm pack` to run the packaged executable:
-
-```bash
-npm exec --yes --package ./rea-agents-VERSION.tgz -- rea --help
-```
-
-Replace `VERSION` with the packed version; do not use a tarball from an earlier
-build.
-
-Publish the public package:
-
-```bash
-npm publish --access public
-```
-
-After npm registry propagation, verify the published CLI and connect the client SDK version pinned in `package.json` to the published server to confirm the canonical tool catalog:
-
-```bash
-npx -y rea-agents@latest --help
-npx -y rea-agents@latest doctor
-npx -y rea-agents@latest setup --yes --all-detected
-npx -y rea-agents@latest mcp
-```
+Keep new implementation commits on main for the next release. The workflow
+owns packaged-artifact verification, npm publication, the published CLI/MCP
+canary, and MCP Registry publication. Sync release metadata back to main after
+publication; see the guide for partial-publication recovery and verification.
