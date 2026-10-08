@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { open, type FileHandle } from "node:fs/promises";
+import { open, realpath, type FileHandle } from "node:fs/promises";
 
 import { applePlatform } from "../../domain/apple/applePlatforms.js";
 import type { MachoImageFacts } from "../../domain/apple/dylibResolution.js";
@@ -70,18 +70,18 @@ class CacheFile {
     readonly suffix: string,
     readonly handle: FileHandle,
     readonly size: number,
-    /** Device, inode, size, and mtime of the file as opened. */
+    /** Device, inode, size, and nanosecond change times of the file as opened. */
     readonly identity: string,
   ) {}
 
   static async open(path: string, suffix: string): Promise<CacheFile> {
     const handle = await open(path, "r");
     try {
-      const metadata = await handle.stat();
+      const metadata = await handle.stat({ bigint: true });
       return new CacheFile(
         suffix,
         handle,
-        metadata.size,
+        safeNumber(metadata.size, "file size"),
         CacheFile.identify(metadata),
       );
     } catch (cause: unknown) {
@@ -91,19 +91,27 @@ class CacheFile {
   }
 
   static identify(metadata: {
-    readonly dev: number;
-    readonly ino: number;
-    readonly size: number;
-    readonly mtimeMs: number;
+    readonly dev: bigint;
+    readonly ino: bigint;
+    readonly size: bigint;
+    readonly mtimeNs: bigint;
+    readonly ctimeNs: bigint;
   }): string {
-    return [metadata.dev, metadata.ino, metadata.size, metadata.mtimeMs].join(
-      ":",
-    );
+    return [
+      metadata.dev,
+      metadata.ino,
+      metadata.size,
+      metadata.mtimeNs,
+      metadata.ctimeNs,
+    ].join(":");
   }
 
   /** Whether the open file still matches the identity recorded at open. */
   async unchanged(): Promise<boolean> {
-    return CacheFile.identify(await this.handle.stat()) === this.identity;
+    return (
+      CacheFile.identify(await this.handle.stat({ bigint: true })) ===
+      this.identity
+    );
   }
 
   async read(offset: number, length: number): Promise<Buffer> {
@@ -296,7 +304,10 @@ export class DyldSharedCache {
     path: string,
     signal?: AbortSignal,
   ): Promise<DyldSharedCache> {
-    const main = await CacheFile.open(path, "");
+    // Inspection and tracing share this boundary: companion discovery follows
+    // the actual main cache file, while adapters keep the selected path spelling.
+    const canonicalPath = await realpath(path);
+    const main = await CacheFile.open(canonicalPath, "");
     const files = [main];
     try {
       const parsed = await readHeader(main);
@@ -305,9 +316,9 @@ export class DyldSharedCache {
       // With named suffixes, dyld strips a development main file's extension
       // first: dyld_shared_cache_arm64e.development -> dyld_shared_cache_arm64e.01.development.
       const base =
-        named && path.endsWith(DEVELOPMENT_EXTENSION)
-          ? path.slice(0, -DEVELOPMENT_EXTENSION.length)
-          : path;
+        named && canonicalPath.endsWith(DEVELOPMENT_EXTENSION)
+          ? canonicalPath.slice(0, -DEVELOPMENT_EXTENSION.length)
+          : canonicalPath;
       const statuses: DyldCacheSubcache[] = [];
       const parsedFiles = [{ file: main, parsed }];
       for (const entry of subcaches) {

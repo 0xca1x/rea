@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { rm, writeFile } from "node:fs/promises";
+import { rm, symlink, writeFile } from "node:fs/promises";
 import { dirname, join, relative } from "node:path";
 
 import { describe, expect, it } from "vitest";
@@ -217,4 +217,25 @@ it("retains a relative caller-selected cache path in trace and inspection metada
   });
   if (!inspected.ok) throw inspected.error;
   expect(inspected.value.parameters).toMatchObject({ cache_path: selected });
+});
+
+it("discovers companions beside a symlink target while preserving selected metadata", async () => {
+  const path = await writeCache(
+    dyldCacheFixture(IMAGES),
+    "dyld_shared_cache_arm64e.development",
+  );
+  const aliases = await createTestTempDirectory("rea-cache-alias-");
+  const alias = join(aliases, "selected-cache");
+  await symlink(path, alias);
+  const result = await inspectDyldSharedCache({
+    cache_path: alias,
+    images: ["/usr/lib/swift/libswiftCore.dylib"],
+  });
+  if (!result.ok) throw result.error;
+  expect(result.value).toMatchObject({
+    cache_path: alias,
+    subcaches: [{ status: "present", suffix: ".01" }],
+    inspected_images: [{ status: "parsed", file: ".01" }],
+    coverage: { status: "complete", unreadable_subcaches: [] },
+  });
 });
