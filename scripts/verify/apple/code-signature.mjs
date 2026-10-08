@@ -208,9 +208,43 @@ try {
     ),
   );
 
-  // Only deep verification sees a file added inside nested code.
-  const nested = join(root, "Nested.app");
-  await exec("/usr/bin/ditto", [app, nested]);
+  // Negative fixtures contain only the code needed for each rejection. A large
+  // nested-code graph can interleave codesign progress, making that capture
+  // inconclusive independently of the invalidity these checks exercise.
+  const minimalApp = async (name, includeNested) => {
+    const bundle = join(root, `${name}.app`);
+    const contents = join(bundle, "Contents");
+    await mkdir(join(contents, "MacOS"), { recursive: true });
+    await copyFile(tool, join(contents, "MacOS", "Fixture"));
+    await writeFile(
+      join(contents, "Info.plist"),
+      `<?xml version="1.0" encoding="UTF-8"?>
+<plist version="1.0"><dict><key>CFBundleExecutable</key><string>Fixture</string>
+<key>CFBundleIdentifier</key><string>com.example.rea.signature</string>
+<key>CFBundlePackageType</key><string>APPL</string></dict></plist>`,
+    );
+    if (includeNested) {
+      await mkdir(join(contents, "XPCServices"));
+      await exec("/usr/bin/ditto", [
+        join(app, "Contents/XPCServices/Svc.xpc"),
+        join(contents, "XPCServices/Svc.xpc"),
+      ]);
+    }
+    await exec("/usr/bin/xcrun", [
+      "codesign",
+      "--force",
+      "--deep",
+      "--sign",
+      "-",
+      bundle,
+    ]);
+    assert.equal(
+      (await artifactCli("inspect-signature", bundle)).verification.status,
+      "valid",
+    );
+    return bundle;
+  };
+  const nested = await minimalApp("Nested", true);
   await writeFile(
     join(nested, "Contents/XPCServices/Svc.xpc/Contents/added.txt"),
     "unsealed",
@@ -224,9 +258,10 @@ try {
     JSON.stringify(nestedTamper.verification),
   );
 
-  await mkdir(join(app, "Contents/Resources"), { recursive: true });
-  await writeFile(join(app, "Contents/Resources/added.txt"), "unsealed");
-  const tampered = await artifactCli("inspect-signature", app);
+  const mainTamper = await minimalApp("Tampered", false);
+  await mkdir(join(mainTamper, "Contents/Resources"));
+  await writeFile(join(mainTamper, "Contents/Resources/added.txt"), "unsealed");
+  const tampered = await artifactCli("inspect-signature", mainTamper);
   assert.equal(tampered.verification.status, "invalid");
   assert.ok(
     tampered.verification.diagnostics.some((line) => line.includes("added")),
