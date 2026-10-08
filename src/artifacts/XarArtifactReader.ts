@@ -566,6 +566,16 @@ export class XarArtifactReader implements ArtifactReader {
         "format",
         `xar member ${entry.path} declares size ${data.size} with length ${data.length}`,
       );
+    // Validate before creating any streams: otherwise an early throw would
+    // orphan a flowing source that keeps reading after close().
+    if (
+      data.encoding !== "application/octet-stream" &&
+      data.encoding !== "application/x-gzip"
+    )
+      throw new ArtifactReaderFailure(
+        "format",
+        `xar member ${entry.path} uses unsupported encoding ${data.encoding}`,
+      );
     const archived = data.archivedChecksum;
     const archivedVerifier =
       archived === undefined || !this.#verifyChecksums
@@ -576,7 +586,7 @@ export class XarArtifactReader implements ArtifactReader {
       archivedVerifier === undefined ? raw : raw.pipe(archivedVerifier);
     let decoded: Readable;
     if (data.encoding === "application/octet-stream") decoded = archivedChecked;
-    else if (data.encoding === "application/x-gzip") {
+    else {
       // xar's "x-gzip" members are zlib streams; bound decoded output to the
       // declared extracted size so a gzip bomb cannot exhaust the process.
       const inflate = createInflate();
@@ -589,11 +599,7 @@ export class XarArtifactReader implements ArtifactReader {
         bounded.destroy(memberFailure(entry.path, cause)),
       );
       decoded = inflated.pipe(bounded);
-    } else
-      throw new ArtifactReaderFailure(
-        "format",
-        `xar member ${entry.path} uses unsupported encoding ${data.encoding}`,
-      );
+    }
     const checksum = data.extractedChecksum;
     const verified =
       checksum === undefined || !this.#verifyChecksums
@@ -603,7 +609,16 @@ export class XarArtifactReader implements ArtifactReader {
     decoded.on("error", (cause: unknown) =>
       verified.destroy(memberFailure(entry.path, cause)),
     );
-    return decoded.pipe(verified);
+    const out = decoded.pipe(verified);
+    // Tear down the source chain when the consumer is done: otherwise a
+    // consumer that stops early (or a checksum failure at flush) leaves the
+    // generator suspended, and its next read after close() surfaces as an
+    // unhandled "archive is closed" failure.
+    out.on("close", () => {
+      raw.destroy();
+      archivedVerifier?.destroy();
+    });
+    return out;
   }
 
   async *#chunks(
