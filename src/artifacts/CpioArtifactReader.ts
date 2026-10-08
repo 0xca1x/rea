@@ -335,6 +335,7 @@ export class CpioArtifactReader implements ArtifactReader {
             "format",
             "cpio trailer declares member data",
           );
+        await drain(this.#verified(source, header, raw));
         await source.finish();
         yield* this.#unresolvedLinks();
         return;

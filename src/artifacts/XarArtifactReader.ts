@@ -101,6 +101,16 @@ const parseChecksum = (
   const value = (element.textContent ?? "").trim().toLowerCase();
   if (CHECKSUM_ALGORITHMS.get(style) === undefined)
     return { unsupported: style || "(missing style)", value };
+  const expected = DIGEST_BYTES.get(style);
+  if (
+    expected === undefined ||
+    value.length !== expected * 2 ||
+    !/^[0-9a-f]+$/u.test(value)
+  )
+    throw new ArtifactReaderFailure(
+      "format",
+      `xar ${tag} has malformed ${style} digest text`,
+    );
   return { algorithm: style, value };
 };
 
@@ -529,6 +539,11 @@ export class XarArtifactReader implements ArtifactReader {
         `xar header declares unsupported TOC checksum algorithm ${headerAlg}`,
       );
     const checksum = childElement(toc, "checksum");
+    if (expectedStyle === null && checksum !== undefined)
+      throw new ArtifactReaderFailure(
+        "format",
+        "xar header declares no TOC checksum but the TOC supplies one",
+      );
     if (checksum === undefined) {
       if (headerAlg !== 0)
         throw new ArtifactReaderFailure(

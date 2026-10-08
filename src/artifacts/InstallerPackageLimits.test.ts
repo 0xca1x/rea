@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buffer } from "node:stream/consumers";
 import { Readable } from "node:stream";
+import { gunzipSync, gzipSync } from "node:zlib";
 import { expect, it } from "vitest";
 import { ArtifactDecodedBudget } from "./ArtifactDecodedBudget.js";
 import { CpioArtifactReader } from "./CpioArtifactReader.js";
@@ -232,4 +233,65 @@ it("does not expose a partial inventory when a previous TOC load failed", async 
       await expect(scan()).rejects.toMatchObject({ reason: "format" });
     },
   );
+});
+
+it("rejects a TOC checksum when the fixed header declares none", async () => {
+  const bytes = Buffer.from(
+    xarArchive([{ name: "a", data: Buffer.from("ok") }]),
+  );
+  bytes.writeUInt32BE(0, 24);
+  await withReader(bytes, async (reader) => {
+    await expect(
+      (async () => {
+        for await (const entry of reader.entries()) void entry;
+      })(),
+    ).rejects.toMatchObject({
+      reason: "format",
+      message: expect.stringContaining("declares no TOC checksum"),
+    });
+  });
+});
+
+it.each(["", "nothex", "a".repeat(63)])(
+  "rejects malformed checksum text %j before applying integrity policy",
+  async (digest) => {
+    const bytes = rewriteXarToc(
+      xarArchive([{ name: "a", data: Buffer.from("ok") }]),
+      (xml) =>
+        xml.replace(
+          /<extracted-checksum style="sha1">[^<]*<\/extracted-checksum>/u,
+          `<extracted-checksum style="sha256">${digest}</extracted-checksum>`,
+        ),
+    );
+    await withReader(bytes, async (reader) => {
+      await expect(
+        (async () => {
+          for await (const entry of reader.entries()) void entry;
+        })(),
+      ).rejects.toMatchObject({
+        reason: "format",
+        message: "xar extracted-checksum has malformed sha256 digest text",
+      });
+    });
+  },
+);
+
+it("rejects a CRC trailer whose declared checksum is not empty-data zero", async () => {
+  const raw = gunzipSync(gzipCpio([], "crc"));
+  raw.write("00000001", 102, "ascii");
+  const reader = new CpioArtifactReader(async () =>
+    Readable.from([gzipSync(raw)]),
+  );
+  try {
+    await expect(
+      (async () => {
+        for await (const entry of reader.entries()) void entry;
+      })(),
+    ).rejects.toMatchObject({
+      reason: "integrity",
+      message: "cpio CRC disagrees with content: TRAILER!!!",
+    });
+  } finally {
+    await reader.close();
+  }
 });
