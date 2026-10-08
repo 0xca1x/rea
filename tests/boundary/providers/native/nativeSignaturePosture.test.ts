@@ -9,6 +9,7 @@ import { AnalysisCancelledError } from "../../../../src/domain/analysisErrorCore
 import { ok } from "../../../../src/domain/result.js";
 import { inspectSignatureSchema } from "../../../../src/domain/native/nativeInspection.js";
 import { createTestTempDirectory } from "../../../fixtures/temporaryDirectory.js";
+import { notarizationTicketFixture } from "../../../fixtures/notarizationTicket.js";
 import {
   NativeFixtureRunner as FixtureRunner,
   nativeMachoTarget as machoTarget,
@@ -34,7 +35,7 @@ class TamperedRunner extends FixtureRunner {
   }
 }
 
-const fixtureApp = async (ticket: string | undefined) => {
+const fixtureApp = async (ticket: string | Uint8Array | undefined) => {
   const directory = await createTestTempDirectory("rea-signature-posture-");
   const app = join(directory, "Fixture.app");
   const executable = join(app, "Contents/MacOS/Fixture");
@@ -47,7 +48,7 @@ const fixtureApp = async (ticket: string | undefined) => {
 
 describe("native signature posture", () => {
   it("verifies the opened bundle and reports a stapled ticket", async () => {
-    const ticket = "stapled ticket bytes";
+    const ticket = notarizationTicketFixture();
     const { app, executable } = await fixtureApp(ticket);
     const signature = await new NativeMacOSProvider(
       new FixtureRunner(),
@@ -395,6 +396,44 @@ describe("native signature posture slice-aware cases", () => {
 });
 
 describe("signature architecture coverage", () => {
+  it("does not turn inconclusive slice probes into an unsigned claim", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new InconclusiveSlicesRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    expect(result.signed).toBe(true);
+    expect(result.verification?.status).toBe("unknown");
+    expect(
+      result.security_facets.every(({ state }) => state === "unknown"),
+    ).toBe(true);
+    expect(result.limitations).toContainEqual(
+      expect.stringContaining("could not be classified"),
+    );
+  });
+
+  it("does not report arbitrary ticket-location bytes as a stapled ticket", async () => {
+    const bytes = "stapled ticket bytes";
+    const { app, executable } = await fixtureApp(bytes);
+    const signature = await new NativeMacOSProvider(
+      new FixtureRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    expect(result.stapled_ticket).toMatchObject({
+      status: "unreadable",
+      sha256: createHash("sha256").update(bytes).digest("hex"),
+      size: bytes.length,
+      reason: "Not a recognized s8ch notarization ticket container",
+    });
+  });
   it("probes a valid x86_64h subtype rather than dropping it", async () => {
     const { app, executable } = await fixtureApp(undefined);
     const signature = await new NativeMacOSProvider(
@@ -543,6 +582,25 @@ class UniversalMixedRunner extends FixtureRunner {
     return ok({
       ...result.value,
       stderr,
+      stderrBytes: Buffer.byteLength(stderr),
+    });
+  }
+}
+
+/** Aggregate display succeeds, but per-architecture probes and verification fail operationally. */
+class InconclusiveSlicesRunner extends FixtureRunner {
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || tool !== "codesign") return result;
+    if (!arguments_.includes("-a") && arguments_[0] !== "--verify")
+      return result;
+    const stderr = "I/O error reading signing data\n";
+    return ok({
+      ...result.value,
+      stdout: "",
+      stderr,
+      exitCode: 1,
+      stdoutBytes: 0,
       stderrBytes: Buffer.byteLength(stderr),
     });
   }

@@ -5,6 +5,7 @@ import { dirname, join } from "node:path";
 
 import type { InspectSignature } from "../domain/native/nativeInspection.js";
 import type { NativeCommandCapture } from "./CommandRunner.js";
+import { ticketStructureIssue } from "./NotarizationTicket.js";
 
 /** Notarization tickets are a few kilobytes; larger files are hashed in chunks. */
 const HASH_CHUNK_BYTES = 64 * 1024;
@@ -59,7 +60,7 @@ export const verificationIOFailure = (
   diagnostics: readonly string[],
 ): boolean =>
   diagnostics.some((line) =>
-    /permission denied|operation not permitted|\bEACCES\b|\bEPERM\b/iu.test(
+    /permission denied|operation not permitted|\bEACCES\b|\bEPERM\b|I\/O error|input\/output error/iu.test(
       line,
     ),
   );
@@ -155,12 +156,36 @@ export const stapledTicket = async (
           size: null,
           reason: "changed",
         };
+      const structureIssue = await ticketStructureIssue(
+        async (offset, length) => {
+          signal?.throwIfAborted();
+          const buffer = new Uint8Array(length);
+          let done = 0;
+          while (done < length) {
+            const { bytesRead } = await handle.read(
+              buffer,
+              done,
+              length - done,
+              offset + done,
+            );
+            if (bytesRead === 0) break;
+            done += bytesRead;
+          }
+          return buffer.subarray(0, done);
+        },
+        opened.size,
+      );
       const hash = createHash("sha256");
       const buffer = new Uint8Array(HASH_CHUNK_BYTES);
       let size = 0;
-      for (;;) {
+      while (size < opened.size) {
         signal?.throwIfAborted();
-        const { bytesRead } = await handle.read(buffer, 0, buffer.length, null);
+        const { bytesRead } = await handle.read(
+          buffer,
+          0,
+          Math.min(buffer.length, opened.size - size),
+          size,
+        );
         if (bytesRead === 0) break;
         size += bytesRead;
         hash.update(buffer.subarray(0, bytesRead));
@@ -198,11 +223,11 @@ export const stapledTicket = async (
         };
       }
       return {
-        status: "present",
+        status: structureIssue === null ? "present" : "unreadable",
         path: relative,
         sha256: hash.digest("hex"),
         size,
-        reason: null,
+        reason: structureIssue,
       };
     } finally {
       await handle.close();
@@ -268,6 +293,7 @@ const errorCode = (cause: unknown): string | undefined =>
 export const SIGNATURE_POSTURE_LIMITATIONS = [
   "Signature verification is local `codesign --verify --deep --strict`; certificate revocation, Gatekeeper policy, and Apple's notarization records are not checked.",
   "Security facets are derived from CodeDirectory flags and entitlements; runtime policy such as System Integrity Protection, AMFI, and setuid bits can further restrict a process.",
+  "Ticket presence requires recognized local s8ch/g8tk container and DER framing; certificate authenticity, ticket signature validity, and ticket-to-code binding are not verified.",
 ];
 
 /**
