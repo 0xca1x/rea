@@ -18,9 +18,6 @@ export const deriveFindings = (
   edges.forEach((edge, index) => {
     if (edge.resolution.status === "unresolved")
       findings.push(unresolvedFinding(edge, index));
-    if (edge.resolution.status === "unresolved" && edge.loader_conditional) {
-      // loader_conditional already qualifies the unresolved explanation.
-    }
     const resolvedAt = edge.candidates.findIndex(
       ({ outcome }) => outcome === "resolved" || outcome === "shared-cache",
     );
@@ -46,14 +43,16 @@ export const deriveFindings = (
         : "";
     const unknownQualifies = earlierUnknown
       ? " An earlier candidate outside the analyzed root may still win at runtime, so this fallback loads only conditionally."
-      : "";
+      : edge.resolution.status === "conditional"
+        ? " Unmodeled environment overrides or other process search inputs may take precedence; placing an image at this rpath does not establish which image dyld will load."
+        : "";
     if (resolvedAt > 0 && earlierAbsent.length > 0)
       findings.push({
         kind: "earlier-rpath-candidate-absent",
         edge_index: index,
         image: edge.loader,
         basis: "derived",
-        explanation: `dyld searches ${earlierAbsent.join(", ")} before ${edge.resolution.image ?? edge.install_name}. A Mach-O placed at an earlier path would load first unless code-signing library validation rejects it; library validation is not evaluated here (see inspect_signature).${loaderQualifies}${unknownQualifies}`,
+        explanation: `The modeled dyld search checks ${earlierAbsent.join(", ")} before ${edge.resolution.image ?? edge.install_name}. A compatible Mach-O placed at an earlier modeled path could take precedence over that fallback, subject to unmodeled search inputs and code-signing library validation; library validation is not evaluated here (see inspect_signature).${loaderQualifies}${unknownQualifies}`,
       });
   });
   for (const { image, architecture } of roots) {

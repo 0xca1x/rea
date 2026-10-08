@@ -312,6 +312,16 @@ describe("dyld resolution outcomes", () => {
     expect(trace.findings[0]?.explanation).toContain(
       "Contents/MacOS/../Overrides/libfound.dylib",
     );
+    expect(trace.edges[0]?.candidates.map(({ outcome }) => outcome)).toEqual([
+      "absent",
+      "resolved",
+    ]);
+    expect(trace.findings[0]?.explanation).toContain(
+      "Unmodeled environment overrides",
+    );
+    expect(trace.findings[0]?.explanation).toContain(
+      "does not establish which image dyld will load",
+    );
   });
 
   it("reports non-Mach-O, malformed and wrong-architecture candidates", async () => {
