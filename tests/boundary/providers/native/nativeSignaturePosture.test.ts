@@ -271,6 +271,39 @@ describe("native signature posture boundaries", () => {
     );
   });
 
+  it("keeps main-executable facets when only nested code fails", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new NestedOnlyFailureRunner(app),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    expect(result.verification?.status).toBe("invalid");
+    expect(
+      result.security_facets.find(({ facet }) => facet === "library-validation")
+        ?.state,
+    ).toBe("enforced");
+  });
+
+  it("flags permission diagnostics separately from invalid signatures", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new PermissionDeniedRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    expect(result.verification?.status).toBe("invalid");
+    expect(result.limitations).toContainEqual(
+      expect.stringContaining("permission or I/O diagnostic"),
+    );
+  });
+
   it("reports cancellation while hashing the stapled ticket", async () => {
     const { app, executable } = await fixtureApp("ticket");
     const controller = new AbortController();
@@ -338,6 +371,45 @@ class NewlinePathRunner extends FixtureRunner {
       stderr,
       stdoutBytes: 0,
       stderrBytes: Buffer.byteLength(stderr),
+    });
+  }
+}
+
+/** Bundle verification fails on nested code while the main executable passes. */
+class NestedOnlyFailureRunner extends FixtureRunner {
+  constructor(private readonly bundle: string) {
+    super();
+  }
+
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || arguments_[0] !== "--verify") return result;
+    if (arguments_.at(-1) !== this.bundle) return result;
+    const stderr = `${this.bundle}: a sealed resource is missing or invalid\nfile modified: ${this.bundle}/Contents/XPCServices/Svc.xpc\n`;
+    return ok({
+      ...result.value,
+      stdout: "",
+      stderr,
+      stdoutBytes: 0,
+      stderrBytes: Buffer.byteLength(stderr),
+      exitCode: 1,
+    });
+  }
+}
+
+/** Verification fails because nested code cannot be read. */
+class PermissionDeniedRunner extends FixtureRunner {
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || arguments_[0] !== "--verify") return result;
+    const stderr = `${arguments_.at(-1)}: permission denied while reading nested code\n`;
+    return ok({
+      ...result.value,
+      stdout: "",
+      stderr,
+      stdoutBytes: 0,
+      stderrBytes: Buffer.byteLength(stderr),
+      exitCode: 1,
     });
   }
 }

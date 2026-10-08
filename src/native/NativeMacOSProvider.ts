@@ -426,6 +426,27 @@ class NativeMacOSClient implements AnalysisClient {
       unsigned,
     );
     limitations.push(...(await unconfirmedNestedCode(verification)));
+    if (
+      verification.status === "invalid" &&
+      verification.diagnostics.some((line) =>
+        /permission denied|operation not permitted|\bEACCES\b|\bEPERM\b/iu.test(
+          line,
+        ),
+      )
+    )
+      limitations.push(
+        "Signature verification reported a permission or I/O diagnostic; the invalid status may reflect unreadable nested code rather than a broken signature.",
+      );
+    // Deep verification covers nested code: when it fails only there, the
+    // main executable's own signature may still be valid. Check it directly
+    // before hiding its facets as unauthenticated.
+    let mainInvalid = verification.status === "invalid";
+    if (mainInvalid && !unsigned && verifyPath !== this.target.path) {
+      const mainVerify = await this.#verifySignature(this.target.path, signal);
+      if (!mainVerify.ok) return mainVerify;
+      captures.push(mainVerify.value);
+      mainInvalid = mainVerify.value.exitCode !== 0;
+    }
     const provenance = captures.map((capture) =>
       invocation(capture, this.target.path),
     );
@@ -442,7 +463,7 @@ class NativeMacOSClient implements AnalysisClient {
         entitlementsKnown: unsigned || entitlements.value.exitCode === 0,
         mixedSlices: mixedSigning,
         appleOrigin,
-        signatureInvalid: verification.status === "invalid",
+        signatureInvalid: mainInvalid,
       }),
       provenance,
       limitations,
