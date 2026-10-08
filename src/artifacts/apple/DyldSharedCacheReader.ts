@@ -1,4 +1,5 @@
 import { createHash } from "node:crypto";
+import { constants } from "node:fs";
 import { open, realpath, type FileHandle } from "node:fs/promises";
 
 import { applePlatform } from "../../domain/apple/applePlatforms.js";
@@ -75,9 +76,17 @@ class CacheFile {
   ) {}
 
   static async open(path: string, suffix: string): Promise<CacheFile> {
-    const handle = await open(path, "r");
+    const handle = await open(
+      await realpath(path),
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
     try {
       const metadata = await handle.stat({ bigint: true });
+      if (!metadata.isFile())
+        throw new ArtifactReaderFailure(
+          "path",
+          `Dyld cache path is not a regular file: ${path}`,
+        );
       return new CacheFile(
         suffix,
         handle,
@@ -372,21 +381,43 @@ export class DyldSharedCache {
             "mapping file offset",
           );
           const size = safeNumber(mapping.size, "mapping size");
+          const address = safeNumber(mapping.address, "mapping address");
           // A truncated file that declares mappings beyond its bytes cannot
           // map those addresses; drop the unverified extent.
-          if (fileOffset < 0 || size < 0 || fileOffset + size > file.size)
+          if (
+            fileOffset < 0 ||
+            size <= 0 ||
+            fileOffset + size > file.size ||
+            !Number.isSafeInteger(address + size)
+          )
             throw new ArtifactReaderFailure(
               "format",
               `dyld cache mapping in ${file.suffix === "" ? "the main file" : `subcache ${file.suffix}`} extends beyond its file`,
             );
           return {
             file,
-            address: safeNumber(mapping.address, "mapping address"),
+            address,
             size,
             fileOffset,
           };
         }),
       );
+      const ordered = regions.toSorted(
+        (left, right) => left.address - right.address,
+      );
+      for (let index = 1; index < ordered.length; index++) {
+        const previous = ordered[index - 1];
+        const current = ordered[index];
+        if (
+          previous !== undefined &&
+          current !== undefined &&
+          current.address < previous.address + previous.size
+        )
+          throw new ArtifactReaderFailure(
+            "format",
+            `Dyld cache VM mappings overlap at ${hex(current.address)} between ${previous.file.suffix || "main"} and ${current.file.suffix || "main"}`,
+          );
+      }
       return new DyldSharedCache(header, images, files, regions);
     } catch (cause: unknown) {
       await Promise.allSettled(files.map(({ handle }) => handle.close()));

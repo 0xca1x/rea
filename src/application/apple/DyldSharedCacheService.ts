@@ -68,6 +68,13 @@ const failure = (cause: unknown): AnalysisError => {
       cause.message,
     );
   if (cause instanceof Error && "code" in cause) {
+    if (cause.code === "EISDIR")
+      return new ArtifactOperationError(
+        OPERATION,
+        "path",
+        undefined,
+        cause.message,
+      );
     if (cause.code === "ENOENT" || cause.code === "ENOTDIR")
       return new ArtifactOperationError(
         OPERATION,
@@ -85,7 +92,12 @@ const failure = (cause: unknown): AnalysisError => {
   }
   if (cause instanceof Error && cause.name === "AbortError")
     return new ArtifactOperationError(OPERATION, "cancelled");
-  return new ArtifactOperationError(OPERATION, "io");
+  return new ArtifactOperationError(
+    OPERATION,
+    "io",
+    undefined,
+    cause instanceof Error ? cause.message : String(cause),
+  );
 };
 
 /** Inspect a dyld shared cache file set selected by path. */

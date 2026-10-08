@@ -24,6 +24,30 @@ import { dyldSharedCacheResultSchema } from "../../../src/domain/apple/dyldShare
 import { traceDylibResolution } from "../../../src/artifacts/apple/DylibResolutionReader.js";
 import { createTestTempDirectory } from "../../fixtures/temporaryDirectory.js";
 
+it("rejects a directory and overlapping combined VM mappings with specific reasons", async () => {
+  const directory = await createTestTempDirectory("rea-cache-invalid-regions-");
+  expect(await inspectDyldSharedCache({ cache_path: directory })).toMatchObject(
+    { ok: false, error: { reason: "path" } },
+  );
+  const fixture = dyldCacheFixture(IMAGES);
+  const original = fixture.subcaches[0];
+  if (original === undefined) throw new Error("missing subcache fixture");
+  const subcache = Buffer.from(original.bytes);
+  const main = Buffer.from(fixture.main);
+  const mainTable = main.readUInt32LE(0x10);
+  const subTable = subcache.readUInt32LE(0x10);
+  subcache.writeBigUInt64LE(main.readBigUInt64LE(mainTable), subTable);
+  const path = await writeCache({
+    ...fixture,
+    subcaches: [{ ...original, bytes: subcache }],
+  });
+  const result = await inspectDyldSharedCache({ cache_path: path });
+  expect(result).toMatchObject({
+    ok: false,
+    error: { reason: "format", detail: expect.stringContaining("overlap") },
+  });
+});
+
 const dylib = (installName: string, dependencies: readonly Uint8Array[] = []) =>
   machoImage({
     fileType: FILE_TYPE.dylib,
