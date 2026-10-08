@@ -153,6 +153,11 @@ interface PostureInput {
    * platform identifier mean an Apple platform binary.
    */
   readonly appleOrigin: boolean;
+  /**
+   * The local `--deep --strict` verification failed for the opened code.
+   * Flag bits from an unauthenticated CodeDirectory must not decide facets.
+   */
+  readonly signatureInvalid?: boolean;
 }
 
 /** Whether the CodeDirectory claims a platform binary, and whether Apple signed it. */
@@ -465,6 +470,14 @@ export const deriveSecurityFacets = (input: PostureInput): SecurityFacet[] => {
     executableMemory(input),
     appSandbox(input),
   ];
+  // An invalid main signature leaves flag bits unauthenticated; keep the raw
+  // CodeDirectory fields but report every facet as unknown.
+  if (input.signatureInvalid === true)
+    return facets.map((facet) => ({
+      ...facet,
+      state: "unknown" as const,
+      evidence: ["signature verification failed"],
+    }));
   // Each slice runs under its own signature; the inspected one does not
   // describe an unsigned slice of the same file.
   return input.mixedSlices

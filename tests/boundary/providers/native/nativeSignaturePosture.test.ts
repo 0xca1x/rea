@@ -181,6 +181,29 @@ describe("native signature posture", () => {
 });
 
 describe("native signature posture boundaries", () => {
+  it("verifies the inner bundle for iOS-on-Mac wrappers", async () => {
+    const directory = await createTestTempDirectory("rea-signature-wrapper-");
+    const outer = join(directory, "WrapperApp.app");
+    const inner = join(outer, "Wrapper", "Inner.app");
+    const executable = join(inner, "Contents/MacOS/Tool");
+    await mkdir(join(inner, "Contents/MacOS"), { recursive: true });
+    await writeFile(executable, "fixture");
+    const target = {
+      ...machoTarget(executable),
+      sourcePath: outer,
+      bundleInfoPlist: join(inner, "Contents/Info.plist"),
+    };
+    const signature = await new NativeMacOSProvider(
+      new FixtureRunner(),
+      "darwin",
+    )
+      .createClient(target)
+      .execute("inspect_signature", {});
+    expect(signature.ok && signature.value.result).toMatchObject({
+      verification: { path: inner },
+    });
+  });
+
   it("treats a regular file named .app as a bare Mach-O", async () => {
     const directory = await createTestTempDirectory("rea-signature-file-");
     const executable = join(directory, "Tool.app");

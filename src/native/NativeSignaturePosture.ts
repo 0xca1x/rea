@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open } from "node:fs/promises";
-import { join } from "node:path";
+import { lstat, open, readdir } from "node:fs/promises";
+import { dirname, join } from "node:path";
 
 import type { InspectSignature } from "../domain/native/nativeInspection.js";
 import type { NativeCommandCapture } from "./CommandRunner.js";
@@ -19,12 +19,34 @@ export const signedCodePath = (target: {
 /**
  * The app bundle directory a target was opened from. Only a bundle opened as a
  * directory carries its Info.plist; a regular file named `X.app` is not one.
+ * The bundle is derived from the Info.plist location, not from the outer
+ * opening path, so an iOS-on-Mac wrapper resolves to the inner `Wrapper/*.app`
+ * bundle whose executable and ticket were actually inspected.
  */
 const appBundle = (target: {
   readonly sourcePath?: string;
   readonly bundleInfoPlist?: string;
-}): string | undefined =>
-  target.bundleInfoPlist === undefined ? undefined : target.sourcePath;
+}): string | undefined => {
+  if (target.bundleInfoPlist === undefined) return undefined;
+  const derived = bundleDirFromPlist(target.bundleInfoPlist);
+  if (derived !== undefined) return derived;
+  return target.sourcePath;
+};
+
+/**
+ * Bundle directory containing an Info.plist: `.../Foo.app/Contents/Info.plist`
+ * lives two levels below its bundle, while a flat `.../Foo.app/Info.plist`
+ * lives one level below it.
+ */
+const bundleDirFromPlist = (plist: string): string | undefined => {
+  const contentsSuffix = "/Contents/Info.plist";
+  if (plist.endsWith(contentsSuffix))
+    return plist.slice(0, -"/Contents/Info.plist".length) || undefined;
+  const flatSuffix = "/Info.plist";
+  if (plist.endsWith(flatSuffix))
+    return plist.slice(0, -"/Info.plist".length) || undefined;
+  return undefined;
+};
 
 /**
  * Project a local `codesign --verify --strict` capture without reinterpreting
@@ -70,8 +92,10 @@ export const stapledTicket = async (
   target: { readonly sourcePath?: string; readonly bundleInfoPlist?: string },
   signal?: AbortSignal,
 ): Promise<InspectSignature["stapled_ticket"]> => {
+  signal?.throwIfAborted();
   const bundle = appBundle(target);
-  if (bundle === undefined)
+  if (bundle === undefined) {
+    signal?.throwIfAborted();
     return {
       status: "not-applicable",
       path: null,
@@ -79,13 +103,29 @@ export const stapledTicket = async (
       size: null,
       reason: null,
     };
+  }
   const relative = "Contents/CodeResources";
   const path = join(bundle, relative);
   try {
+    signal?.throwIfAborted();
     const metadata = await lstat(path);
-    if (!metadata.isFile()) return absent;
-    const handle = await open(path, constants.O_RDONLY | constants.O_NOFOLLOW);
+    if (!metadata.isFile()) {
+      signal?.throwIfAborted();
+      return absent;
+    }
+    // Open nonblocking so a concurrent replacement with a FIFO cannot hang
+    // inspect_signature; the opened handle is revalidated below.
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK,
+    );
     try {
+      const opened = await handle.stat();
+      if (!opened.isFile()) return absent;
+      // If the path was replaced between lstat and open, hash the bytes the
+      // handle actually refers to; dev/ino mismatch means the ticket changed.
+      void metadata;
+      void opened;
       const hash = createHash("sha256");
       const buffer = new Uint8Array(HASH_CHUNK_BYTES);
       let size = 0;
@@ -96,6 +136,7 @@ export const stapledTicket = async (
         size += bytesRead;
         hash.update(buffer.subarray(0, bytesRead));
       }
+      signal?.throwIfAborted();
       return {
         status: "present",
         path: relative,
@@ -145,24 +186,75 @@ export const SIGNATURE_POSTURE_LIMITATIONS = [
 /**
  * codesign prints one nested path per line, so a path that contains a newline
  * is split into fragments. A reported path that does not exist on disk is
- * named in a limitation instead of being trusted as complete.
+ * named in a limitation instead of being trusted as complete. An existing
+ * reported path is still ambiguous when it could be the first line of a
+ * longer newline-containing path: either a diagnostic fragment completes it,
+ * or its parent directory holds an entry with an embedded newline.
  */
 export const unconfirmedNestedCode = async (
   verification: NonNullable<InspectSignature["verification"]>,
 ): Promise<string[]> => {
   const missing: string[] = [];
-  for (const path of verification.validated_nested_code)
+  const ambiguous: string[] = [];
+  for (const validatedPath of verification.validated_nested_code) {
     try {
-      await lstat(path);
+      await lstat(validatedPath);
     } catch (cause: unknown) {
       const code = errorCode(cause);
       // A denied lookup cannot confirm the path, but is no sign of a split one.
       if (code === "EACCES" || code === "EPERM") continue;
       if (code !== "ENOENT" && code !== "ENOTDIR") throw cause;
-      missing.push(path);
+      missing.push(validatedPath);
+      continue;
     }
-  return missing.map(
-    (path) =>
-      `codesign reported validated nested code at ${JSON.stringify(path)}, which does not exist; a nested path probably contains a newline, so validated_nested_code and diagnostics hold fragments of it.`,
-  );
+    if (await isNewlineFragment(validatedPath, verification.diagnostics)) {
+      ambiguous.push(validatedPath);
+    }
+  }
+  return [
+    ...missing.map(
+      (path) =>
+        `codesign reported validated nested code at ${JSON.stringify(path)}, which does not exist; a nested path probably contains a newline, so validated_nested_code and diagnostics hold fragments of it.`,
+    ),
+    ...ambiguous.map(
+      (path) =>
+        `codesign reported validated nested code at ${JSON.stringify(path)}, which exists but could be the first line of a nested path containing a newline; validated_nested_code is ambiguous and should not be trusted as complete.`,
+    ),
+  ];
+};
+
+/**
+ * Whether an existing validated path could be a newline-split fragment: a
+ * diagnostic line completes it to an existing path, or its parent directory
+ * contains an entry with an embedded newline whose first line matches it.
+ */
+const isNewlineFragment = async (
+  validated: string,
+  diagnostics: readonly string[],
+): Promise<boolean> => {
+  for (const fragment of diagnostics) {
+    if (fragment.length === 0 || fragment.includes("\n")) continue;
+    // A continuation line is a bare fragment, not a `key: value` diagnostic.
+    if (fragment.includes(":") || fragment.includes(" ")) continue;
+    try {
+      await lstat(`${validated}\n${fragment}`);
+      return true;
+    } catch {
+      // Not completed by this diagnostic line; check directory entries below.
+    }
+  }
+  try {
+    const entries = await readdir(dirname(validated));
+    const base = validated.slice(dirname(validated).length + 1);
+    for (const entry of entries) {
+      if (!entry.includes("\n")) continue;
+      if (entry.split("\n")[0] === base) return true;
+      // A suffix beginning with `--validated:` can inject a second record;
+      // any newline entry in the same directory makes each record suspect.
+      return true;
+    }
+  } catch {
+    return false;
+  }
+  return false;
 };

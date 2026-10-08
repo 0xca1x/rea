@@ -442,6 +442,7 @@ class NativeMacOSClient implements AnalysisClient {
         entitlementsKnown: unsigned || entitlements.value.exitCode === 0,
         mixedSlices: mixedSigning,
         appleOrigin,
+        signatureInvalid: verification.status === "invalid",
       }),
       provenance,
       limitations,

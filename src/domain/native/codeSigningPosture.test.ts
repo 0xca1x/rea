@@ -177,6 +177,21 @@ describe("security facets that need more than one CodeDirectory", () => {
     ]);
   });
 
+  it("leaves every facet unknown when verification failed", () => {
+    const invalid = derive({
+      signed: true,
+      codeDirectory: directory(0x2000 | RUNTIME, 26),
+      entitlements: null,
+      entitlementsKnown: true,
+      appleOrigin: true,
+      signatureInvalid: true,
+    });
+    expect(new Set(invalid.map(({ state }) => state))).toEqual(
+      new Set(["unknown"]),
+    );
+    expect(invalid[0]?.evidence).toEqual(["signature verification failed"]);
+  });
+
   it("keeps facets unknown when flags or entitlements are unavailable", () => {
     expect(
       states(
