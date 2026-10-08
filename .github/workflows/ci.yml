@@ -102,8 +102,8 @@ jobs:
         with:
           name: rea-dist
           path: dist
-      - name: Generate source catalog from downloaded build
-        run: node scripts/generate-mcp-tool-catalog.mjs
+      - name: Generate projections from downloaded build
+        run: npm run build:projections
       - run: npm run test:ci:shard:run -- --shard=${{ matrix.shard }}
       - uses: actions/upload-artifact@v4
         if: ${{ !cancelled() }}
