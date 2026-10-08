@@ -1,5 +1,6 @@
 /** Canonical names used by every one-shot CLI command registration. */
 export const CLI_COMMANDS = Object.freeze({
+  inspectEvmInterface: "inspect-evm-interface",
   inspectWebNetworkCapture: "inspect-web-network-capture",
   observeWebExecution: "observe-web-execution",
   inspectWebEventListeners: "inspect-web-event-listeners",
@@ -28,6 +29,7 @@ export const CLI_COMMANDS = Object.freeze({
   extractArtifact: "extract-artifact",
   decodeInterfaceBuilder: "decode-interface-builder",
   inspectKeyedArchive: "inspect-keyed-archive",
+  traceDylibResolution: "trace-dylib-resolution",
   inspectNativeDataType: "inspect-native-data-type",
   inspectNativeLoadImage: "inspect-native-load-image",
   readBytes: "read-bytes",

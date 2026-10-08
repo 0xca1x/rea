@@ -7,10 +7,10 @@
       "client": "2.3.1",
       "core": "2.3.1"
     },
-    "skill_version": "31"
+    "skill_version": "32"
   },
   "tools": {
-    "total": 136,
+    "total": 138,
     "families": [
       {
         "id": "direct",
@@ -100,13 +100,15 @@
       {
         "id": "artifact",
         "surface": "artifact-provider",
-        "count": 5,
+        "count": 7,
         "tools": [
           "decode_interface_builder",
           "extract_artifact",
           "inspect_artifact",
           "inspect_asset_catalog",
-          "inspect_keyed_archive"
+          "inspect_evm_interface",
+          "inspect_keyed_archive",
+          "trace_dylib_resolution"
         ]
       },
       {
@@ -237,6 +239,12 @@
       "name": "Binwalk",
       "version": "3.1.0",
       "capabilities": ["inspect_firmware_regions"]
+    },
+    {
+      "id": "evmole-interface",
+      "name": "REA EVM interface adapter",
+      "version": "evmole@0.9.3",
+      "capabilities": ["inspect_evm_interface"]
     },
     {
       "id": "ghidra",
@@ -400,7 +408,8 @@
         "extract_artifact",
         "inspect_artifact",
         "inspect_asset_catalog",
-        "inspect_keyed_archive"
+        "inspect_keyed_archive",
+        "trace_dylib_resolution"
       ]
     },
     {
@@ -592,7 +601,7 @@
     }
   ],
   "cli": {
-    "primary_count": 91,
+    "primary_count": 93,
     "commands": [
       "address-to-file-offset",
       "analyze",
@@ -636,6 +645,7 @@
       "inspect-asset-catalog",
       "inspect-binary-layout",
       "inspect-electron-page",
+      "inspect-evm-interface",
       "inspect-firmware-regions",
       "inspect-keyed-archive",
       "inspect-macho",
@@ -676,6 +686,7 @@
       "trace",
       "trace-android-references",
       "trace-application-feature",
+      "trace-dylib-resolution",
       "trace-javascript-semantics",
       "trace-native-ui-action",
       "trace-native-values",
@@ -695,15 +706,15 @@
   },
   "runtime_catalog": {
     "counts": {
-      "cli_commands": 91,
-      "mcp_tools": 136,
+      "cli_commands": 93,
+      "mcp_tools": 138,
       "mcp_prompts": 6
     },
     "digests": {
-      "tools_sha256": "4354307a0df0e0b6fa2359bca9182ba9e7bc20a69b3414dc8b18866446e7bb04",
+      "tools_sha256": "38ae770dfb525835175a1e0f931c05c371967cdc814c75b085e865d7db0be23a",
       "prompts_sha256": "ef2de8814390b340623c32001610aa2709d90bed51537b6e562ab3abf144ab4d",
-      "combined_sha256": "c48f17cf49e23c586ab7db27c370d8014f7ca4fcdf8dc904eb2d1a161169f4ce",
-      "providers_sha256": "6e0080dea56ee7f3ebdf5ce0d74ea18e5d44ebce80b89c7f4de94e9c69f4d2e5"
+      "combined_sha256": "876d360007323512c42a25736a1ce0524246a9b87aad27564c2b275bc1c34133",
+      "providers_sha256": "44935c127fd040af492f2da591dfcd782d766770d306b91242216674220047ed"
     }
   }
 }

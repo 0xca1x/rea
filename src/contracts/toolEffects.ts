@@ -41,6 +41,11 @@ const sessionEvidence = effects({ mutatesSession: true });
 
 /** Explicit effect audit for every public tool. */
 export const TOOL_EFFECTS: Readonly<Record<string, ToolEffects>> = {
+  inspect_evm_interface: effects({
+    mutatesSession: true,
+    writesFilesystem: true,
+    launchesProcess: true,
+  }),
   inspect_web_network_capture: effects({
     mutatesSession: true,
     writesFilesystem: true,
@@ -213,6 +218,7 @@ export const TOOL_EFFECTS: Readonly<Record<string, ToolEffects>> = {
   decode_interface_builder: evidence,
   inspect_asset_catalog: nativeEvidence,
   inspect_keyed_archive: evidence,
+  trace_dylib_resolution: evidence,
   inspect_managed_artifact: evidence,
   inspect_managed_members: evidence,
   inspect_managed_native_boundaries: evidence,
