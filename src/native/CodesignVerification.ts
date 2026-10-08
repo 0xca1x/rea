@@ -19,10 +19,23 @@ export const codesignReasons = (
   const observed = `${capture.stderr}\n${capture.stdout}`;
   const text =
     path.length === 0 ? observed : observed.split(path).join("$SELECTED_PATH");
-  return text
-    .split("\n")
-    .filter((line) => !/^--(?:prepared|validated):/u.test(line))
-    .map((line) => codesignReason(line, "$SELECTED_PATH"));
+  const lines = text.split("\n");
+  const progress = lines.some((line) =>
+    /^--(?:prepared|validated):/u.test(line),
+  );
+  return (
+    lines
+      .filter((line) => !/^--(?:prepared|validated):/u.test(line))
+      // Unprefixed continuation text can belong to an unescaped nested filename.
+      // Keep it as raw evidence, but do not turn it into a verification reason.
+      .filter(
+        (line) =>
+          !progress ||
+          line.startsWith("$SELECTED_PATH: ") ||
+          line.startsWith("$SELECTED_PATH/"),
+      )
+      .map((line) => codesignReason(line, "$SELECTED_PATH"))
+  );
 };
 
 /** Classify only explicit diagnostic reasons; nonzero exit alone proves no invalidity. */
@@ -83,6 +96,17 @@ export const signatureVerification = (
     ),
     exit_code: capture.exitCode,
     diagnostics,
+    prepared_nested_code: [
+      ...new Set(
+        lines.flatMap((line) =>
+          line.startsWith("--prepared:")
+            ? [line.slice("--prepared:".length)]
+            : [],
+        ),
+      ),
+    ].sort(),
+    raw_stdout: capture.stdout,
+    raw_stderr: capture.stderr,
     validated_nested_code: [
       ...new Set(
         lines.flatMap((line) =>

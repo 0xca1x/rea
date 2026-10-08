@@ -1,6 +1,5 @@
 import { lstat, readdir } from "node:fs/promises";
 import { dirname } from "node:path";
-import type { InspectSignature } from "../domain/native/nativeInspection.js";
 
 /** Filesystem seam for path-completeness checks and cancellation regressions. */
 export interface NativeNestedPathView {
@@ -20,7 +19,7 @@ const errorCode = (cause: unknown) =>
 
 /** Preserve reported paths, but qualify missing, denied or newline-ambiguous records. */
 export const unconfirmedNestedCode = async (
-  verification: NonNullable<InspectSignature["verification"]>,
+  verification: { readonly validated_nested_code: readonly string[] },
   signal?: AbortSignal,
   view: NativeNestedPathView = FILE_SYSTEM,
 ): Promise<string[]> => {

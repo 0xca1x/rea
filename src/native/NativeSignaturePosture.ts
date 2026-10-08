@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { constants } from "node:fs";
+import { constants, type Stats } from "node:fs";
 import { lstat, open } from "node:fs/promises";
 import { join } from "node:path";
 
@@ -56,6 +56,9 @@ const bundleDirFromPlist = (plist: string): string | undefined => {
 export const stapledTicket = async (
   target: { readonly sourcePath?: string; readonly bundleInfoPlist?: string },
   signal?: AbortSignal,
+  pathProbe: (path: string, phase: "before" | "after") => Promise<Stats> = (
+    path,
+  ) => lstat(path),
 ): Promise<InspectSignature["stapled_ticket"]> => {
   signal?.throwIfAborted();
   const bundle = appBundle(target);
@@ -73,7 +76,7 @@ export const stapledTicket = async (
   const path = join(bundle, relative);
   try {
     signal?.throwIfAborted();
-    const metadata = await lstat(path);
+    const metadata = await pathProbe(path, "before");
     if (!metadata.isFile()) {
       signal?.throwIfAborted();
       return absent;
@@ -147,7 +150,7 @@ export const stapledTicket = async (
       // handle still describes the unlinked original: re-resolve the path and
       // refuse a digest that no longer belongs to the bundle.
       try {
-        const current = await lstat(path);
+        const current = await pathProbe(path, "after");
         if (!sameTicketFile(current, opened))
           return {
             status: "unreadable",
@@ -156,7 +159,10 @@ export const stapledTicket = async (
             size: null,
             reason: "changed",
           };
-      } catch {
+      } catch (cause: unknown) {
+        signal?.throwIfAborted();
+        const code = errorCode(cause);
+        if (code !== "ENOENT" && code !== "ENOTDIR") throw cause;
         return {
           status: "unreadable",
           path: relative,
@@ -180,7 +186,7 @@ export const stapledTicket = async (
     if (code === "ENOENT" || code === "ENOTDIR") return absent;
     // A privacy or ACL denial leaves the ticket's presence unknown, not the
     // whole signature inspection.
-    if (code === "EACCES" || code === "EPERM")
+    if (code === "EACCES" || code === "EPERM" || code === "EIO")
       return {
         status: "unreadable",
         path: relative,

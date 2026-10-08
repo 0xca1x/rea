@@ -1,10 +1,11 @@
 import { createHash } from "node:crypto";
-import { chmod, mkdir, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
 import { describe, expect, it } from "vitest";
 
 import { NativeMacOSProvider } from "../../../../src/native/NativeMacOSProvider.js";
+import { stapledTicket } from "../../../../src/native/NativeSignaturePosture.js";
 import { AnalysisCancelledError } from "../../../../src/domain/analysisErrorCore.js";
 import { ok } from "../../../../src/domain/result.js";
 import { inspectSignatureSchema } from "../../../../src/domain/native/nativeInspection.js";
@@ -28,7 +29,10 @@ class TamperedRunner extends FixtureRunner {
   override async run(tool: string, arguments_: readonly string[]) {
     const result = await super.run(tool, arguments_);
     if (!result.ok || arguments_[0] !== "--verify") return result;
-    const stderr = TAMPERED_STDERR;
+    const stderr = TAMPERED_STDERR.replaceAll(
+      "/Applications/Fixture.app",
+      arguments_.at(-1) ?? "",
+    );
     return ok({
       ...result.value,
       stdout: "",
@@ -111,17 +115,17 @@ describe("native signature posture", () => {
     expect(signature.ok).toBe(true);
     if (!signature.ok) return;
     const result = inspectSignatureSchema.parse(signature.value.result);
-    expect(result.verification).toEqual({
+    expect(result.verification).toMatchObject({
       path: app,
       status: "invalid",
       exit_code: 1,
       diagnostics: [
-        "/Applications/Fixture.app: a sealed resource is missing or invalid",
-        "file modified: /Applications/Fixture.app/Contents/Resources/en.lproj/Main.nib",
+        `${app}: a sealed resource is missing or invalid`,
+        `file modified: ${app}/Contents/Resources/en.lproj/Main.nib`,
       ],
       validated_nested_code: [
-        "/Applications/Fixture.app/Contents/PlugIns/A.appex",
-        "/Applications/Fixture.app/Contents/XPCServices/B.xpc",
+        `${app}/Contents/PlugIns/A.appex`,
+        `${app}/Contents/XPCServices/B.xpc`,
       ],
     });
     expect(result.stapled_ticket.status).toBe("absent");
@@ -491,6 +495,26 @@ describe("signature architecture coverage", () => {
 });
 
 describe("signature target version binding", () => {
+  it.each(["EACCES", "EPERM", "EIO"])(
+    "preserves final ticket-path failure %s instead of inventing mutation",
+    async (code) => {
+      const { app } = await fixtureApp(notarizationTicketFixture());
+      const ticket = await stapledTicket(
+        { sourcePath: app, bundleInfoPlist: join(app, "Contents/Info.plist") },
+        undefined,
+        async (path, phase) => {
+          if (phase === "after")
+            throw Object.assign(new Error("host lookup failed"), { code });
+          return lstat(path);
+        },
+      );
+      expect(ticket).toMatchObject({
+        status: "unreadable",
+        reason: code,
+        sha256: null,
+      });
+    },
+  );
   it("downgrades facets when the executable changes between captures", async () => {
     const { app, executable } = await fixtureApp(undefined);
     const signature = await new NativeMacOSProvider(

@@ -130,10 +130,16 @@ try {
   );
   await withArtifactMcp(app, async (client) => {
     const viaMcp = await artifactMcpResult(client, "inspect_signature");
-    assert.deepEqual(
-      { ...viaMcp, provenance: [] },
-      { ...plain, provenance: [] },
-    );
+    const semantic = (value) => ({
+      ...value,
+      provenance: [],
+      verification: {
+        ...value.verification,
+        raw_stdout: "",
+        raw_stderr: "",
+      },
+    });
+    assert.deepEqual(semantic(viaMcp), semantic(plain));
   });
 
   const tool = join(app, "Contents/Helpers/rea-tool");

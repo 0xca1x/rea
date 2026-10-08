@@ -33,6 +33,9 @@ export const signatureVerificationSchema = z.object({
   exit_code: z.number().int().nullable(),
   diagnostics: z.array(z.string()),
   validated_nested_code: z.array(z.string()),
+  prepared_nested_code: z.array(z.string()).default([]),
+  raw_stdout: z.string().default(""),
+  raw_stderr: z.string().default(""),
 });
 
 /** Local ticket presence and content identity, without a remote notarization claim. */

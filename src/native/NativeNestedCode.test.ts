@@ -7,10 +7,6 @@ it("observes cancellation between nested filesystem lookups", async () => {
   await expect(
     unconfirmedNestedCode(
       {
-        path: "/app",
-        status: "valid",
-        exit_code: 0,
-        diagnostics: [],
         validated_nested_code: ["/app/first", "/app/second"],
       },
       controller.signal,
