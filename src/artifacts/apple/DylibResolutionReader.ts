@@ -17,6 +17,10 @@ import {
 import { ArtifactReaderFailure } from "../ArtifactReader.js";
 import { DirectoryArtifactReader } from "../DirectoryArtifactReader.js";
 import { DyldSharedCache } from "./DyldSharedCacheReader.js";
+import {
+  filesystemDyldLinkTarget,
+  filesystemDyldLookupPath,
+} from "./FilesystemDyldPaths.js";
 import { hasMachoMagic, readMachoImage } from "./MachoLoadCommandReader.js";
 
 const HASH_CHUNK_BYTES = 1024 * 1024;
@@ -63,11 +67,14 @@ class FilesystemTreeView implements DylibTreeView {
 
   async #readEntry(path: string): Promise<DylibTreeEntry | undefined> {
     cancelled(this.signal);
-    const absolute = join(this.root, path);
+    const absolute = filesystemDyldLookupPath(this.root, path);
     try {
       const metadata = await lstat(absolute);
       if (metadata.isSymbolicLink())
-        return { kind: "symlink", target: await readlink(absolute) };
+        return {
+          kind: "symlink",
+          target: filesystemDyldLinkTarget(await readlink(absolute)),
+        };
       if (metadata.isDirectory()) return { kind: "directory" };
       return metadata.isFile() ? { kind: "file" } : undefined;
     } catch (cause: unknown) {
