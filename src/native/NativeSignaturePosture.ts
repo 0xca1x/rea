@@ -252,13 +252,19 @@ export const unconfirmedNestedCode = async (
 ): Promise<string[]> => {
   const missing: string[] = [];
   const ambiguous: string[] = [];
+  const denied: string[] = [];
   for (const validatedPath of verification.validated_nested_code) {
     try {
       await lstat(validatedPath);
     } catch (cause: unknown) {
       const code = errorCode(cause);
       // A denied lookup cannot confirm the path, but is no sign of a split one.
-      if (code === "EACCES" || code === "EPERM") continue;
+      if (code === "EACCES" || code === "EPERM") {
+        denied.push(
+          `Could not confirm completeness of codesign nested path ${JSON.stringify(validatedPath)}: permission denied (${code}); the reported path may be a fragment.`,
+        );
+        continue;
+      }
       if (code !== "ENOENT" && code !== "ENOTDIR") throw cause;
       missing.push(validatedPath);
       continue;
@@ -268,6 +274,7 @@ export const unconfirmedNestedCode = async (
     }
   }
   return [
+    ...denied,
     ...missing.map(
       (path) =>
         `codesign reported validated nested code at ${JSON.stringify(path)}, which does not exist; a nested path probably contains a newline, so validated_nested_code and diagnostics hold fragments of it.`,

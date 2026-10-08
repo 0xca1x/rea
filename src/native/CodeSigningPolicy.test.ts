@@ -3,8 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   codeDirectoryFlagNames,
   deriveSecurityFacets,
-  type CodeDirectory,
-} from "./codeSigningPosture.js";
+} from "./CodeSigningPolicy.js";
+import type { CodeDirectory } from "../domain/native/codeSigningPosture.js";
 
 const directory = (
   flags: number | null,

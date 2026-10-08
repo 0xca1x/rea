@@ -1,7 +1,5 @@
-import {
-  codeDirectoryFlagNames,
-  type CodeDirectory,
-} from "../../domain/native/codeSigningPosture.js";
+import { type CodeDirectory } from "../../domain/native/codeSigningPosture.js";
+import { codeDirectoryFlagNames } from "../CodeSigningPolicy.js";
 import {
   inspectSignatureSchema,
   type InspectSignature,

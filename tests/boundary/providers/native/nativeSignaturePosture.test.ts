@@ -12,8 +12,13 @@ import { createTestTempDirectory } from "../../../fixtures/temporaryDirectory.js
 import { notarizationTicketFixture } from "../../../fixtures/notarizationTicket.js";
 import {
   NativeFixtureRunner as FixtureRunner,
-  nativeMachoTarget as machoTarget,
+  nativeMachoTarget as unboundMachoTarget,
 } from "../../../fixtures/nativeCommands.js";
+
+const machoTarget = (path: string, app?: string) => ({
+  ...unboundMachoTarget(path, app),
+  sha256: createHash("sha256").update("fixture").digest("hex"),
+});
 
 const TAMPERED_STDERR =
   "--prepared:/Applications/Fixture.app/Contents/XPCServices/B.xpc\n--validated:/Applications/Fixture.app/Contents/XPCServices/B.xpc\n--validated:/Applications/Fixture.app/Contents/PlugIns/A.appex\n/Applications/Fixture.app: a sealed resource is missing or invalid\nfile modified: /Applications/Fixture.app/Contents/Resources/en.lproj/Main.nib\n";
@@ -484,6 +489,77 @@ describe("signature architecture coverage", () => {
     });
   });
 });
+
+describe("signature target version binding", () => {
+  it("downgrades facets when the executable changes between captures", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new ReplacingExecutableRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    expect(result.verification?.status).toBe("valid");
+    expect(
+      result.security_facets.every(({ state }) => state === "unknown"),
+    ).toBe(true);
+    expect(result.limitations).toContain(
+      `Signature target changed during inspection: ${executable}`,
+    );
+    expect(result.security_facets[0]?.evidence).toContain(
+      "target version not bound",
+    );
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "reports denied nested-path completeness checks",
+    async () => {
+      const { app, executable } = await fixtureApp(undefined);
+      const helpers = join(app, "Contents/Helpers");
+      await mkdir(helpers);
+      await chmod(helpers, 0);
+      try {
+        const signature = await new NativeMacOSProvider(
+          new NewlinePathRunner(),
+          "darwin",
+        )
+          .createClient(machoTarget(executable, app))
+          .execute("inspect_signature", {});
+        if (!signature.ok) throw signature.error;
+        const result = inspectSignatureSchema.parse(signature.value.result);
+        expect(result.limitations).toContainEqual(
+          expect.stringContaining("Could not confirm completeness"),
+        );
+        expect(result.limitations).toContainEqual(
+          expect.stringContaining("permission denied (EACCES)"),
+        );
+      } finally {
+        await chmod(helpers, 0o755);
+      }
+    },
+  );
+});
+
+/** Mutate only the fixture after its initial display has been observed. */
+class ReplacingExecutableRunner extends FixtureRunner {
+  #changed = false;
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (
+      !this.#changed &&
+      tool === "codesign" &&
+      arguments_.includes("--verbose=4")
+    ) {
+      const path = arguments_.at(-1);
+      if (path !== undefined)
+        await writeFile(path, "replacement executable bytes");
+      this.#changed = true;
+    }
+    return result;
+  }
+}
 
 /** A signed bundle whose nested helper is unsigned. */
 class UnsignedNestedRunner extends FixtureRunner {

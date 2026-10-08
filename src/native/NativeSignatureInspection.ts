@@ -7,7 +7,11 @@ import {
   inspectSignatureSchema,
   type NativeCommandInvocation,
 } from "../domain/native/nativeInspection.js";
-import { deriveSecurityFacets } from "../domain/native/codeSigningPosture.js";
+import { deriveSecurityFacets } from "./CodeSigningPolicy.js";
+import {
+  bindSignatureTarget,
+  signatureTargetIssue,
+} from "./SignatureTargetBinding.js";
 import { omittedPrototypeKeysLimitation } from "../domain/propertyListKeys.js";
 import { err, ok, type Result } from "../domain/result.js";
 import {
@@ -89,6 +93,7 @@ export const inspectNativeSignature = async (options: {
   readonly signal?: AbortSignal;
 }): Promise<Result<NativeObservation, AnalysisError>> => {
   const { target, capture, signal } = options;
+  const binding = await bindSignatureTarget(target, signal);
   const displays = await signatureDisplays(target.path, capture, signal);
   if (!displays.ok) return displays;
   const { display, requirements, entitlements } = displays.value;
@@ -160,6 +165,22 @@ export const inspectNativeSignature = async (options: {
     mainInvalid = main.value.exitCode !== 0;
   }
   const provenance = captures.map(options.invocation);
+  const ticket = await stapledTicket(target, signal);
+  const versionIssue = await signatureTargetIssue(target, binding, signal);
+  const facets = deriveSecurityFacets({
+    signed: !aggregateUnsigned,
+    codeDirectory: parsed.code_directory,
+    entitlements: entitlementValue.value,
+    entitlementsKnown: unsigned || entitlements.exitCode === 0,
+    mixedSlices: slices.value.mixed,
+    appleOrigin,
+    signatureInvalid: mainInvalid,
+  });
+  if (versionIssue !== null)
+    limitations.push(
+      versionIssue,
+      "Security facets are unknown because command observations could not be bound to one registered target version.",
+    );
   const result = inspectSignatureSchema.parse({
     ...parsed,
     signed: !aggregateUnsigned,
@@ -167,16 +188,16 @@ export const inspectNativeSignature = async (options: {
       /designated\s*=>\s*(.+)$/mu.exec(requirements.stdout)?.[1] ?? null,
     entitlements: entitlementValue.value,
     verification,
-    stapled_ticket: await stapledTicket(target, signal),
-    security_facets: deriveSecurityFacets({
-      signed: !aggregateUnsigned,
-      codeDirectory: parsed.code_directory,
-      entitlements: entitlementValue.value,
-      entitlementsKnown: unsigned || entitlements.exitCode === 0,
-      mixedSlices: slices.value.mixed,
-      appleOrigin,
-      signatureInvalid: mainInvalid,
-    }),
+    stapled_ticket: ticket,
+    security_facets:
+      versionIssue === null
+        ? facets
+        : facets.map((facet) => ({
+            ...facet,
+            state: "unknown" as const,
+            evidence: [...facet.evidence, "target version not bound"],
+            explanation: `${facet.explanation} Target version binding failed: ${versionIssue}`,
+          })),
     provenance,
     limitations,
   });
