@@ -70,16 +70,40 @@ class CacheFile {
     readonly suffix: string,
     readonly handle: FileHandle,
     readonly size: number,
+    /** Device, inode, size, and mtime of the file as opened. */
+    readonly identity: string,
   ) {}
 
   static async open(path: string, suffix: string): Promise<CacheFile> {
     const handle = await open(path, "r");
     try {
-      return new CacheFile(suffix, handle, (await handle.stat()).size);
+      const metadata = await handle.stat();
+      return new CacheFile(
+        suffix,
+        handle,
+        metadata.size,
+        CacheFile.identify(metadata),
+      );
     } catch (cause: unknown) {
       await handle.close();
       throw cause;
     }
+  }
+
+  static identify(metadata: {
+    readonly dev: number;
+    readonly ino: number;
+    readonly size: number;
+    readonly mtimeMs: number;
+  }): string {
+    return [metadata.dev, metadata.ino, metadata.size, metadata.mtimeMs].join(
+      ":",
+    );
+  }
+
+  /** Whether the open file still matches the identity recorded at open. */
+  async unchanged(): Promise<boolean> {
+    return CacheFile.identify(await this.handle.stat()) === this.identity;
   }
 
   async read(offset: number, length: number): Promise<Buffer> {
@@ -547,9 +571,16 @@ export class DyldSharedCache {
   }
 
   private async hashFile(
-    file: { readonly handle: FileHandle; readonly size: number },
+    file: CacheFile,
     signal?: AbortSignal,
   ): Promise<string> {
+    // In-place rewrites through the same inode keep this handle valid, so a
+    // digest is bound to its bytes only when the identity is unchanged.
+    if (!(await file.unchanged()))
+      throw new ArtifactReaderFailure(
+        "integrity",
+        "dyld cache file changed before its digest was read",
+      );
     const hash = createHash("sha256");
     const buffer = Buffer.alloc(HASH_CHUNK_BYTES);
     let position = 0;
@@ -573,6 +604,11 @@ export class DyldSharedCache {
       position += bytesRead;
     }
     if (position !== file.size)
+      throw new ArtifactReaderFailure(
+        "integrity",
+        "dyld cache file changed while its digest was read",
+      );
+    if (!(await file.unchanged()))
       throw new ArtifactReaderFailure(
         "integrity",
         "dyld cache file changed while its digest was read",
