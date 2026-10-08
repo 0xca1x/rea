@@ -239,3 +239,43 @@ it("discovers companions beside a symlink target while preserving selected metad
     coverage: { status: "complete", unreadable_subcaches: [] },
   });
 });
+
+it.each([
+  [2, 7],
+  [3, 8],
+  [4, 9],
+  [11, 12],
+])(
+  "decodes simulator cache family %i into platform %i and retains raw metadata",
+  async (raw, normalized) => {
+    const fixture = dyldCacheFixture(IMAGES.slice(0, 1));
+    const main = Buffer.from(fixture.main);
+    main.writeUInt32LE(raw, 0xd8);
+    main.writeUInt32LE(1 << 9, 0xdc);
+    const path = await writeCache({ ...fixture, main });
+    const result = await inspectDyldSharedCache({ cache_path: path });
+    if (!result.ok) throw result.error;
+    expect(result.value).toMatchObject({
+      platform: { id: normalized },
+      header_platform: { id: raw },
+      simulator: true,
+    });
+    const targetPath = join(dirname(path), "simulator-tool");
+    const bytes = machoImage({
+      fileType: FILE_TYPE.execute,
+      commands: [
+        buildVersionCommand(normalized),
+        dylibCommand(LC.LOAD_DYLIB, "/usr/lib/libSystem.B.dylib"),
+      ],
+    });
+    await writeFile(targetPath, bytes);
+    const trace = await traceDylibResolution({
+      rootPath: dirname(path),
+      targetPath,
+      targetSha256: createHash("sha256").update(bytes).digest("hex"),
+      enumerateRoots: false,
+      parameters: { shared_cache: path },
+    });
+    expect(trace.edges[0]?.resolution.status).toBe("shared-cache");
+  },
+);

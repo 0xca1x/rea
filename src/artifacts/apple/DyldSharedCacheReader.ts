@@ -249,6 +249,22 @@ const version = (value: number): string | null =>
     ? null
     : `${value >>> 16}.${(value >>> 8) & 0xff}.${value & 0xff}`;
 
+/** dyld_cache_header.formatBits simulator bit follows the 8-bit version and disk flag. */
+const SIMULATOR_CACHE_FLAG = 1 << 9;
+const SIMULATOR_PLATFORMS: ReadonlyMap<number, number> = new Map([
+  [2, 7],
+  [3, 8],
+  [4, 9],
+  [11, 12],
+]);
+
+const cachePlatform = (id: number | null, simulator: boolean | null) =>
+  id === null
+    ? null
+    : applePlatform(
+        simulator === true ? (SIMULATOR_PLATFORMS.get(id) ?? id) : id,
+      );
+
 /**
  * Decode `cacheType` according to header generation. Modern headers
  * (those carrying `cacheSubType`) use `0 = development`, `1 = production`;
@@ -438,6 +454,9 @@ export class DyldSharedCache {
       has(parsed, offset, 8) ? hex(header.readBigUInt64LE(offset)) : null;
     const platform = u32(FIELD.platform);
     const altPlatform = u32(FIELD.altPlatform);
+    const formatBits = u32(FIELD.formatBits);
+    const simulator =
+      formatBits === null ? null : (formatBits & SIMULATOR_CACHE_FLAG) !== 0;
     const cacheType = has(parsed, FIELD.cacheType, 8)
       ? Number(header.readBigUInt64LE(FIELD.cacheType))
       : null;
@@ -459,12 +478,18 @@ export class DyldSharedCache {
       magic: parsed.magic,
       architecture: parsed.magic.slice(MAGIC_PREFIX.length).trim(),
       uuid: parsed.uuid,
-      platform: platform === null ? null : applePlatform(platform),
+      platform: cachePlatform(platform, simulator),
+      header_platform: platform === null ? null : applePlatform(platform),
+      header_alt_platform:
+        altPlatform === null || altPlatform === 0
+          ? null
+          : applePlatform(altPlatform),
+      simulator,
       os_version: version(u32(FIELD.osVersion) ?? 0),
       alt_platform:
         altPlatform === null || altPlatform === 0
           ? null
-          : applePlatform(altPlatform),
+          : cachePlatform(altPlatform, simulator),
       alt_os_version: version(u32(FIELD.altOsVersion) ?? 0),
       cache_type: decodeCacheType(
         cacheType,

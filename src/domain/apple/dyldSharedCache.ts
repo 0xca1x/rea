@@ -37,6 +37,10 @@ const headerSchema = z.object({
   architecture: z.string(),
   uuid: z.string(),
   platform: applePlatformSchema.nullable(),
+  /** Producer platform fields before simulator-family normalization. */
+  header_platform: applePlatformSchema.nullable().default(null),
+  header_alt_platform: applePlatformSchema.nullable().default(null),
+  simulator: z.boolean().nullable().default(null),
   os_version: z.string().nullable(),
   alt_platform: applePlatformSchema.nullable(),
   alt_os_version: z.string().nullable(),
