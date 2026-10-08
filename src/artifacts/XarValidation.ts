@@ -15,6 +15,16 @@ export const xarInteger = (
   return parsed;
 };
 
+/** Optional mode metadata is accepted only as a complete unsigned octal field. */
+export const xarMode = (value: string | undefined): number | null => {
+  if (value === undefined) return null;
+  const text = value.trim();
+  const mode = /^[0-7]+$/u.test(text) ? Number.parseInt(text, 8) : Number.NaN;
+  if (!Number.isSafeInteger(mode))
+    throw new ArtifactReaderFailure("format", "xar TOC has an invalid mode");
+  return mode;
+};
+
 /** Validate the entire absolute heap range before allocating or requesting it. */
 export const xarHeapPosition = (
   heap: number,

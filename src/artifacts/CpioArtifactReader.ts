@@ -364,19 +364,17 @@ export class CpioArtifactReader implements ArtifactReader {
       // Zero-size headers carry no bytes, so a CRC archive must declare zero.
       // Under record-and-continue this is the occurrence's own forgotten
       // bytes: yield it unavailable so later siblings still inventory.
-      if (header.format === "crc" && header.check !== 0) {
-        if (this.integrity !== "record-and-continue")
-          throw new ArtifactReaderFailure(
-            "integrity",
-            `cpio CRC disagrees with content: ${raw}`,
-          );
+      const verified = await this.#recoverIntegrity(() =>
+        drain(this.#verified(source, header, raw)),
+      );
+      if ("mismatch" in verified) {
         yield entryOf({
           path,
           kind: "file",
           key,
           header,
           size: null,
-          limitations: [`cpio CRC disagrees with content: ${raw}`],
+          limitations: [verified.mismatch],
           contentUnavailable: true,
         });
         return;
@@ -399,6 +397,10 @@ export class CpioArtifactReader implements ArtifactReader {
     if (type !== S_IFREG && type !== S_IFDIR) {
       // FIFOs, device nodes, sockets and other types are not expanded; keep
       // an explicit unavailable occurrence instead of dropping the path.
+      const verified = await this.#recoverIntegrity(() =>
+        drain(this.#verified(source, header, raw)),
+      );
+      this.#current = undefined;
       yield entryOf({
         path,
         kind: "file",
@@ -407,12 +409,10 @@ export class CpioArtifactReader implements ArtifactReader {
         size: null,
         limitations: [
           `Unsupported cpio member type ${type.toString(8)}; content not expanded.`,
+          ...("mismatch" in verified ? [verified.mismatch] : []),
         ],
         contentUnavailable: true,
       });
-      // Consume its data (if any) so the next header aligns.
-      await drain(this.#verified(source, header, raw));
-      this.#current = undefined;
       return;
     }
     yield entryOf({
@@ -441,29 +441,21 @@ export class CpioArtifactReader implements ArtifactReader {
     path: string | undefined,
   ): AsyncGenerator<ArtifactEntry> {
     const { header, raw, key } = member;
-    let target: Buffer | undefined;
-    let crcLimitation: string | undefined;
-    try {
-      if (header.fileSize > MAX_SYMLINK_TARGET_BYTES)
+    const observed = await this.#recoverIntegrity(async () => {
+      if (header.fileSize > MAX_SYMLINK_TARGET_BYTES) {
         await drain(this.#verified(source, header, raw));
-      else target = await this.#collect(source, header, raw);
-    } catch (cause: unknown) {
-      if (
-        this.integrity !== "record-and-continue" ||
-        !(cause instanceof ArtifactReaderFailure) ||
-        cause.reason !== "integrity"
-      )
-        throw cause;
-      crcLimitation = cause.message;
-    }
+        return undefined;
+      }
+      return this.#collect(source, header, raw);
+    });
     if (path === undefined) return;
-    if (crcLimitation !== undefined) {
+    if ("mismatch" in observed) {
       yield entryOf({
         path,
         kind: "symlink",
         key,
         header,
-        limitations: [crcLimitation],
+        limitations: [observed.mismatch],
         contentUnavailable: true,
       });
       return;
@@ -473,8 +465,25 @@ export class CpioArtifactReader implements ArtifactReader {
       kind: "symlink",
       key,
       header,
-      limitations: [symlinkTargetLimitation(header, target)],
+      limitations: [symlinkTargetLimitation(header, observed.value)],
     });
+  }
+
+  /** The one integrity-policy boundary for metadata consumed before yielding an entry. */
+  async #recoverIntegrity<T>(
+    read: () => Promise<T>,
+  ): Promise<{ readonly value: T } | { readonly mismatch: string }> {
+    try {
+      return { value: await read() };
+    } catch (cause: unknown) {
+      if (
+        this.integrity !== "record-and-continue" ||
+        !(cause instanceof ArtifactReaderFailure) ||
+        cause.reason !== "integrity"
+      )
+        throw cause;
+      return { mismatch: cause.message };
+    }
   }
 
   #alias(

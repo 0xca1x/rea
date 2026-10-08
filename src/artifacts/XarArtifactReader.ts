@@ -12,6 +12,7 @@ import {
   xarInteger as integer,
   xarHeapPosition,
   XarPathBudget,
+  xarMode,
 } from "./XarValidation.js";
 import {
   ArtifactReaderFailure,
@@ -211,15 +212,13 @@ const collectMembers = (toc: Element): XarMember[] => {
       throw new ArtifactReaderFailure("path", "xar member has an unsafe name");
     const path = paths.join(next.parent, name);
     const type = textOf(next.element, "type")?.trim();
-    const modeText = textOf(next.element, "mode");
-    const mode =
-      modeText === undefined ? Number.NaN : Number.parseInt(modeText.trim(), 8);
+    const mode = xarMode(textOf(next.element, "mode"));
     const { kind, unsupportedType } = classifyMemberType(type);
     members.push({
       path,
       kind,
       ...(unsupportedType === undefined ? {} : { unsupportedType }),
-      mode: Number.isSafeInteger(mode) ? mode : null,
+      mode,
       data:
         kind === "file" && unsupportedType === undefined
           ? parseData(next.element)
@@ -385,6 +384,10 @@ export class XarArtifactReader implements ArtifactReader {
   #size = 0;
   readonly decodedBudget: ArtifactDecodedBudget;
   #members: readonly XarMember[] = [];
+  readonly #byPath = new Map<string, XarMember>();
+  #loading: Promise<void> | undefined;
+  #closed = false;
+  readonly #streams = new Set<Readable>();
   readonly #integrity = new Map<string, ArtifactChecksumObservation[]>();
 
   readonly #verifyChecksums: boolean;
@@ -408,7 +411,14 @@ export class XarArtifactReader implements ArtifactReader {
   }
 
   async #load(signal?: AbortSignal): Promise<void> {
-    if (this.#handle !== undefined) return;
+    if (this.#closed)
+      throw new ArtifactReaderFailure("unavailable", "xar archive is closed");
+    this.#loading ??= this.#readToc(signal);
+    await this.#loading;
+  }
+
+  /** Load/index once; a rejected parse remains rejected, never a partial inventory. */
+  async #readToc(signal?: AbortSignal): Promise<void> {
     cancelled(signal);
     const handle = await open(this.path, "r");
     this.#handle = handle;
@@ -483,6 +493,14 @@ export class XarArtifactReader implements ArtifactReader {
       throw new ArtifactReaderFailure("format", "xar TOC has no <toc> element");
     await this.#verifyToc(tocElement, compressed, headerChecksumAlg);
     this.#members = collectMembers(tocElement);
+    for (const member of this.#members) {
+      if (this.#byPath.has(member.path))
+        throw new ArtifactReaderFailure(
+          "path",
+          `Duplicate xar member path: ${member.path}`,
+        );
+      this.#byPath.set(member.path, member);
+    }
   }
 
   /** The TOC checksum in the heap covers the compressed TOC bytes. */
@@ -691,7 +709,7 @@ export class XarArtifactReader implements ArtifactReader {
     cancelled(signal);
     this.#integrity.delete(entry.adapterKey);
     await this.#load(signal);
-    const member = this.#members.find(({ path }) => path === entry.adapterKey);
+    const member = this.#byPath.get(entry.adapterKey);
     if (member === undefined || member.kind !== "file")
       throw new ArtifactReaderFailure(
         "path",
@@ -754,11 +772,14 @@ export class XarArtifactReader implements ArtifactReader {
     const checksum = data.extractedChecksum;
     if (checksum !== undefined && this.#verifyChecksums)
       stages.push(new ChecksumVerifier(entry.path, checksum));
-    return artifactStreamPipeline(
+    const stream = artifactStreamPipeline(
       Readable.from(this.#chunks(data.offset, data.length, signal)),
       stages,
       { path: entry.path, signal },
     );
+    this.#streams.add(stream);
+    stream.once("close", () => this.#streams.delete(stream));
+    return stream;
   }
 
   async *#chunks(
@@ -786,8 +807,14 @@ export class XarArtifactReader implements ArtifactReader {
   }
 
   async close(): Promise<void> {
+    this.#closed = true;
+    for (const stream of this.#streams) stream.destroy();
+    await this.#loading?.catch(() => undefined);
     const handle = this.#handle;
     this.#handle = undefined;
+    this.#members = [];
+    this.#byPath.clear();
+    this.#integrity.clear();
     await handle?.close();
   }
 }

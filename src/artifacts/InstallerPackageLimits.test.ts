@@ -172,3 +172,64 @@ it("verifies gzip integrity even when the cpio trailer has already been decoded"
     await reader.close();
   }
 });
+
+it.each(["0755junk", "-1", "", "08"])(
+  "rejects partially parsed or malformed mode %j",
+  async (mode) => {
+    await withReader(
+      xarArchive([{ name: "a", mode, data: Buffer.from("x") }]),
+      async (reader) => {
+        await expect(
+          (async () => {
+            for await (const entry of reader.entries()) void entry;
+          })(),
+        ).rejects.toMatchObject({
+          reason: "format",
+          message: "xar TOC has an invalid mode",
+        });
+      },
+    );
+  },
+);
+
+it("preserves CRC contradictions for special nodes and reaches later siblings", async () => {
+  const bytes = gzipCpio(
+    [
+      { name: "fifo", mode: MODE.fifo, data: "abc", check: 1 },
+      { name: "good", mode: MODE.file, data: "ok" },
+    ],
+    "crc",
+  );
+  const reader = new CpioArtifactReader(
+    async () => Readable.from([bytes]),
+    "record-and-continue",
+  );
+  try {
+    const paths: string[] = [];
+    for await (const entry of reader.entries()) {
+      paths.push(entry.path);
+      if (entry.path === "fifo")
+        expect(entry.limitations).toContain(
+          "cpio CRC disagrees with content: fifo",
+        );
+      if (entry.path === "good")
+        expect((await buffer(await reader.open(entry))).toString()).toBe("ok");
+    }
+    expect(paths).toEqual(["fifo", "good"]);
+  } finally {
+    await reader.close();
+  }
+});
+
+it("does not expose a partial inventory when a previous TOC load failed", async () => {
+  await withReader(
+    xarArchive([{ name: "a", mode: "broken", data: Buffer.from("x") }]),
+    async (reader) => {
+      const scan = async () => {
+        for await (const entry of reader.entries()) void entry;
+      };
+      await expect(scan()).rejects.toMatchObject({ reason: "format" });
+      await expect(scan()).rejects.toMatchObject({ reason: "format" });
+    },
+  );
+});
