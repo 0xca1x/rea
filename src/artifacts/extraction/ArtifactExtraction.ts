@@ -51,19 +51,13 @@ export const extractArtifact = async (
       (occurrence.entry_kind === "file" || occurrence.entry_kind === "slice") &&
       occurrence.logical_path !== ".",
   );
-  const selectedIds = new Set(
-    selectedOccurrences.map(({ occurrence_id: id }) => id),
+  const occurrences = new Map(
+    snapshot.occurrences.map((occurrence) => [
+      occurrence.occurrence_id,
+      occurrence,
+    ]),
   );
-  const occurrences = new Map<string, ArtifactOccurrence>();
-  const neededNodes = new Set<string>();
-  collectOccurrences(
-    snapshot.occurrences,
-    selectedIds,
-    occurrences,
-    neededNodes,
-  );
-  const nodes = new Map<string, ArtifactNode>();
-  collectNodes(snapshot.nodes, neededNodes, nodes);
+  const nodes = new Map(snapshot.nodes.map((node) => [node.artifact_id, node]));
   const inventory: LoadedInventory = {
     manifest: snapshot.manifest,
     occurrences,
@@ -196,11 +190,35 @@ const createExtractionResult = (
   const materializedIds = new Set(
     selected.map(({ occurrence }) => occurrence.occurrence_id),
   );
-  const writtenContradictions = inventory.integrityContradictions.filter(
-    ({ occurrence_id }) => materializedIds.has(occurrence_id),
+  const materializedPaths = new Map(
+    selected.map(({ occurrence }) => [occurrence.logical_path, occurrence]),
   );
+  const wasMaterialized = (contradiction: IntegrityContradiction): boolean => {
+    if (materializedIds.has(contradiction.occurrence_id)) return true;
+    if (!contradiction.unpacked) return false;
+    // An unpacked member is read beside its enclosing ASAR, not from ASAR bytes.
+    const occurrence = inventory.occurrences.get(contradiction.occurrence_id);
+    let parentId = occurrence?.parent_occurrence_id;
+    while (parentId !== null && parentId !== undefined) {
+      const parent = inventory.occurrences.get(parentId);
+      if (parent === undefined) return false;
+      if (
+        parent.artifact_id !== null &&
+        inventory.nodes.get(parent.artifact_id)?.format === "asar"
+      ) {
+        const companion = materializedPaths.get(
+          `${parent.logical_path}.unpacked${contradiction.logical_path.slice(parent.logical_path.length)}`,
+        );
+        return companion?.artifact_id === occurrence?.artifact_id;
+      }
+      parentId = parent.parent_occurrence_id;
+    }
+    return false;
+  };
+  const writtenContradictions =
+    inventory.integrityContradictions.filter(wasMaterialized);
   const nestedContradictions = inventory.integrityContradictions.filter(
-    ({ occurrence_id }) => !materializedIds.has(occurrence_id),
+    (contradiction) => !wasMaterialized(contradiction),
   );
   const extractionSemantic = {
     source_manifest_id: inventory.manifest.manifest_id,
@@ -232,7 +250,7 @@ const createExtractionResult = (
       ...(nestedContradictions.length === 0
         ? []
         : [
-            `${String(nestedContradictions.length)} nested integrity contradiction(s) were not written as their own files (${nestedContradictions.map(({ logical_path }) => logical_path).join(", ")}); the containing archive was materialized instead.`,
+            `${String(nestedContradictions.length)} nested integrity contradiction(s) were not written as their own files (${nestedContradictions.map(({ logical_path }) => logical_path).join(", ")}); their records describe inventory observations, not materialized files.`,
           ]),
     ],
   });
@@ -244,28 +262,6 @@ interface LoadedInventory {
   readonly nodes: ReadonlyMap<string, ArtifactNode>;
   readonly integrityContradictions: readonly IntegrityContradiction[];
 }
-
-const collectOccurrences = (
-  items: readonly ArtifactOccurrence[],
-  selected: ReadonlySet<string>,
-  output: Map<string, ArtifactOccurrence>,
-  neededNodes: Set<string>,
-): void => {
-  for (const item of items) {
-    if (!selected.has(item.occurrence_id)) continue;
-    output.set(item.occurrence_id, item);
-    if (item.artifact_id !== null) neededNodes.add(item.artifact_id);
-  }
-};
-
-const collectNodes = (
-  items: readonly ArtifactNode[],
-  selected: ReadonlySet<string>,
-  output: Map<string, ArtifactNode>,
-): void => {
-  for (const item of items)
-    if (selected.has(item.artifact_id)) output.set(item.artifact_id, item);
-};
 
 const createReader = async (
   path: string,

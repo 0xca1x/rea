@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 
-import { createPackage } from "@electron/asar";
+import { createPackage, createPackageWithOptions } from "@electron/asar";
 import { expect, it } from "vitest";
 
 import { extractArtifact } from "../../../src/artifacts/extraction/ArtifactExtraction.js";
@@ -52,3 +52,45 @@ it("does not claim unmaterialized nested integrity contradictions were extracted
     "extracted file(s) contradict",
   );
 });
+
+it.each(["addon.node", "lib/addon.node"])(
+  "recognizes unpacked companion %s materialized under its filesystem path",
+  async (member) => {
+    const root = await createTestTempDirectory(
+      "rea-unpacked-integrity-extract-",
+    );
+    const source = join(root, "source");
+    const app = join(root, "app");
+    await mkdir(source);
+    await mkdir(app);
+    const original = "unsigned addon bytes";
+    const observed = "signed addon bytes";
+    await mkdir(join(source, "lib"));
+    await writeFile(join(source, member), original);
+    const archive = join(app, "app.asar");
+    await createPackageWithOptions(source, archive, { unpack: "**/*.node" });
+    await writeFile(join(`${archive}.unpacked`, member), observed);
+    const output = join(root, "out");
+    const result = await extractArtifact({
+      inputPath: app,
+      inputFormat: "zip",
+      outputRoot: output,
+      integrity: { mode: "record-and-continue" },
+    });
+    expect(
+      await readFile(join(output, `app.asar.unpacked/${member}`), "utf8"),
+    ).toBe(observed);
+    expect(result.integrity_contradictions).toEqual([
+      expect.objectContaining({
+        logical_path: `app.asar/${member}`,
+        unpacked: true,
+      }),
+    ]);
+    expect(result.limitations.join("\n")).toContain(
+      "1 extracted file(s) contradict declared integrity",
+    );
+    expect(result.limitations.join("\n")).not.toContain(
+      "were not written as their own files",
+    );
+  },
+);
