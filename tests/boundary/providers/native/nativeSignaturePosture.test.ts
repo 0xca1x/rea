@@ -271,6 +271,22 @@ describe("native signature posture boundaries", () => {
     );
   });
 
+  it("reports cancellation while hashing the stapled ticket", async () => {
+    const { app, executable } = await fixtureApp("ticket");
+    const controller = new AbortController();
+    const signature = await new NativeMacOSProvider(
+      new AbortAfterVerifyRunner(controller),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {}, { signal: controller.signal });
+    expect(signature.ok).toBe(false);
+    if (signature.ok) return;
+    expect(signature.error).toBeInstanceOf(AnalysisCancelledError);
+  });
+});
+
+describe("native signature posture slice-aware cases", () => {
   it("keeps main-executable facets when only nested code fails", async () => {
     const { app, executable } = await fixtureApp(undefined);
     const signature = await new NativeMacOSProvider(
@@ -288,6 +304,32 @@ describe("native signature posture boundaries", () => {
     ).toBe("enforced");
   });
 
+  it("probes every slice of a universal binary before declaring it signed", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new UniversalMixedRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    // Aggregate display calls report the signed native slice; the unsigned
+    // x86_64 slice is found only per-architecture.
+    expect(result.verification?.status).toBe("valid");
+    expect(
+      result.security_facets.find(
+        ({ facet }) => facet === "library-validation",
+      ),
+    ).toMatchObject({
+      state: "unknown",
+      evidence: ["architecture slices differ in signing state"],
+    });
+    expect(result.limitations).toContainEqual(
+      expect.stringContaining("Unsigned Mach-O slices: x86_64."),
+    );
+  });
+
   it("flags permission diagnostics separately from invalid signatures", async () => {
     const { app, executable } = await fixtureApp(undefined);
     const signature = await new NativeMacOSProvider(
@@ -302,20 +344,6 @@ describe("native signature posture boundaries", () => {
     expect(result.limitations).toContainEqual(
       expect.stringContaining("permission or I/O diagnostic"),
     );
-  });
-
-  it("reports cancellation while hashing the stapled ticket", async () => {
-    const { app, executable } = await fixtureApp("ticket");
-    const controller = new AbortController();
-    const signature = await new NativeMacOSProvider(
-      new AbortAfterVerifyRunner(controller),
-      "darwin",
-    )
-      .createClient(machoTarget(executable, app))
-      .execute("inspect_signature", {}, { signal: controller.signal });
-    expect(signature.ok).toBe(false);
-    if (signature.ok) return;
-    expect(signature.error).toBeInstanceOf(AnalysisCancelledError);
   });
 });
 
@@ -393,6 +421,40 @@ class NestedOnlyFailureRunner extends FixtureRunner {
       stdoutBytes: 0,
       stderrBytes: Buffer.byteLength(stderr),
       exitCode: 1,
+    });
+  }
+}
+
+/**
+ * A universal binary whose aggregate display calls report the signed native
+ * slice while the x86_64 slice is unsigned.
+ */
+class UniversalMixedRunner extends FixtureRunner {
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || tool !== "codesign") return result;
+    const architectureIndex = arguments_.indexOf("-a");
+    if (architectureIndex >= 0) {
+      if (arguments_[architectureIndex + 1] !== "x86_64") return result;
+      const stderr = `${arguments_.at(-1)}: code object is not signed at all\n`;
+      return ok({
+        ...result.value,
+        stdout: "",
+        stderr,
+        stdoutBytes: 0,
+        stderrBytes: Buffer.byteLength(stderr),
+        exitCode: 1,
+      });
+    }
+    if (!arguments_.includes("--verbose=4")) return result;
+    const stderr = result.value.stderr.replace(
+      /^Format=.*$/mu,
+      "Format=Mach-O universal (x86_64 arm64)",
+    );
+    return ok({
+      ...result.value,
+      stderr,
+      stderrBytes: Buffer.byteLength(stderr),
     });
   }
 }

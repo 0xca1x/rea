@@ -403,21 +403,17 @@ class NativeMacOSClient implements AnalysisClient {
             `Entitlements: ${omittedPrototypeKeysLimitation(entitlementValue.omittedPrototypeKeys)}`,
           ]),
     ];
-    const mixedSigning =
-      !unsigned &&
-      (isNonzeroUnsignedObservation(requirements.value) ||
-        isNonzeroUnsignedObservation(entitlements.value));
-    if (mixedSigning) {
-      const slices = await this.#inspectMixedSignatureSlices(
-        parsed.format,
-        requirements.value.exitCode !== 0,
-        entitlements.value.exitCode !== 0,
-        signal,
-      );
-      if (!slices.ok) return slices;
-      captures.push(...slices.value.captures);
-      limitations.push(...slices.value.limitations);
-    }
+    const sliceState = await this.#sliceSigningState(
+      parsed.format,
+      requirements.value,
+      entitlements.value,
+      unsigned,
+      signal,
+    );
+    if (!sliceState.ok) return sliceState;
+    const mixedSigning = sliceState.value.mixed;
+    captures.push(...sliceState.value.captures);
+    limitations.push(...sliceState.value.limitations);
     // Only the top-level signature decides "unsigned"; unsigned nested
     // code inside a signed bundle makes the bundle invalid.
     const verification = signatureVerification(
@@ -476,6 +472,52 @@ class NativeMacOSClient implements AnalysisClient {
     });
   }
 
+  /**
+   * Whether Mach-O slices differ in signing state. Aggregate `codesign -d`
+   * calls without `-a` report only the host-native slice of a universal
+   * binary, so universal files get per-slice probing before any aggregate
+   * signing claim; thin files keep the aggregate requirements/entitlements
+   * gate.
+   */
+  async #sliceSigningState(
+    format: string | null,
+    requirements: NativeCommandCapture,
+    entitlements: NativeCommandCapture,
+    unsigned: boolean,
+    signal?: AbortSignal,
+  ): Promise<
+    Result<
+      {
+        readonly mixed: boolean;
+        readonly captures: readonly NativeCommandCapture[];
+        readonly limitations: readonly string[];
+      },
+      AnalysisError
+    >
+  > {
+    const universalArchitectures = universalSliceArchitectures(format);
+    const universal =
+      universalArchitectures !== undefined && universalArchitectures.length > 1;
+    const gate =
+      !unsigned &&
+      (isNonzeroUnsignedObservation(requirements) ||
+        isNonzeroUnsignedObservation(entitlements));
+    if (!gate && !universal)
+      return ok({ mixed: false, captures: [], limitations: [] });
+    const slices = await this.#inspectMixedSignatureSlices(
+      format,
+      requirements.exitCode !== 0,
+      entitlements.exitCode !== 0,
+      signal,
+    );
+    if (!slices.ok) return slices;
+    return ok({
+      mixed: gate || (universal && slices.value.mixed),
+      captures: slices.value.captures,
+      limitations: slices.value.limitations,
+    });
+  }
+
   /** Local verification of the opened code, including nested code. */
   #verifySignature(
     path: string,
@@ -497,6 +539,7 @@ class NativeMacOSClient implements AnalysisClient {
     signal?: AbortSignal,
   ): Promise<Result<MixedSignatureSlices, AnalysisError>> {
     const captures: NativeCommandCapture[] = [];
+    const signed: string[] = [];
     const unsigned: string[] = [];
     const unclassified: string[] = [];
     for (const architecture of codeSignArchitectures(format, this.target)) {
@@ -508,16 +551,21 @@ class NativeMacOSClient implements AnalysisClient {
       );
       if (!slice.ok) return slice;
       captures.push(slice.value);
-      if (slice.value.exitCode === 0) continue;
+      if (slice.value.exitCode === 0) {
+        signed.push(architecture);
+        continue;
+      }
       if (isNonzeroUnsignedObservation(slice.value))
         unsigned.push(architecture);
       else unclassified.push(architecture);
     }
-    const limitations = [
-      unsigned.length > 0
-        ? `Unsigned Mach-O slices: ${unsigned.join(", ")}.`
-        : "One or more Mach-O slices are unsigned, but their architectures could not be classified.",
-    ];
+    // Slices differ in signing state when a signed slice coexists with an
+    // unsigned or unclassifiable one; all-signed or all-unsigned files agree.
+    const mixed =
+      signed.length > 0 && (unsigned.length > 0 || unclassified.length > 0);
+    const limitations: string[] = [];
+    if (unsigned.length > 0)
+      limitations.push(`Unsigned Mach-O slices: ${unsigned.join(", ")}.`);
     if (unclassified.length > 0)
       limitations.push(
         `Signature state could not be classified for Mach-O slices: ${unclassified.join(", ")}.`,
@@ -530,7 +578,7 @@ class NativeMacOSClient implements AnalysisClient {
       limitations.push(
         "The aggregate entitlements are unavailable because Mach-O slices have mixed signing states.",
       );
-    return ok({ captures, limitations });
+    return ok({ captures, limitations, mixed });
   }
 
   async #inspectPlist(
@@ -665,6 +713,8 @@ interface NativeObservation {
 interface MixedSignatureSlices {
   readonly captures: readonly NativeCommandCapture[];
   readonly limitations: readonly string[];
+  /** A signed slice coexists with an unsigned or unclassifiable one. */
+  readonly mixed: boolean;
 }
 
 const isNativeOperation = (
@@ -721,6 +771,27 @@ const codeSignCaptureFailure = (
   capture.exitCode === 0 || isNonzeroUnsignedObservation(capture)
     ? null
     : translateCodeSignExitFailure(capture);
+
+/**
+ * Architectures declared by a universal Mach-O format string, or undefined
+ * for thin files. Display commands without `-a` report only the host-native
+ * slice, so universal files need per-slice probing before any aggregate
+ * signing claim.
+ */
+const universalSliceArchitectures = (
+  format: string | null,
+): string[] | undefined => {
+  const universal = /^Mach-O universal \(([^)\r\n]+)\)$/u.exec(
+    format ?? "",
+  )?.[1];
+  if (universal === undefined) return undefined;
+  const architectures = universal
+    .split(/\s+/u)
+    .filter((architecture) =>
+      /^(?:i386|x86_64|armv7|arm64|arm64e)$/u.test(architecture),
+    );
+  return architectures.length > 0 ? [...new Set(architectures)] : undefined;
+};
 
 const codeSignArchitectures = (
   format: string | null,
