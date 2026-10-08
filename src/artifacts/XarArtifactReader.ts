@@ -201,7 +201,10 @@ const classifyMemberType = (
 };
 
 /** Walk nested `<file>` elements in document order. */
-const collectMembers = (toc: Element): XarMember[] => {
+const collectMembers = (
+  toc: Element,
+  budget: ArtifactDecodedBudget,
+): XarMember[] => {
   const members: XarMember[] = [];
   const paths = new XarPathBudget();
   const pending: Array<{ readonly element: Element; readonly parent: string }> =
@@ -221,6 +224,7 @@ const collectMembers = (toc: Element): XarMember[] => {
     )
       throw new ArtifactReaderFailure("path", "xar member has an unsafe name");
     const path = paths.join(next.parent, name);
+    budget.consumeEntry(path);
     const type = textOf(next.element, "type")?.trim();
     const mode = xarMode(textOf(next.element, "mode"));
     const { kind, unsupportedType } = classifyMemberType(type);
@@ -502,7 +506,7 @@ export class XarArtifactReader implements ArtifactReader {
     if (tocElement === undefined)
       throw new ArtifactReaderFailure("format", "xar TOC has no <toc> element");
     await this.#verifyToc(tocElement, compressed, headerChecksumAlg);
-    this.#members = collectMembers(tocElement);
+    this.#members = collectMembers(tocElement, this.decodedBudget);
     for (const member of this.#members) {
       if (this.#byPath.has(member.path))
         throw new ArtifactReaderFailure(

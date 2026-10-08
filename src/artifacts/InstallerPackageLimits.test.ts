@@ -295,3 +295,64 @@ it("rejects a CRC trailer whose declared checksum is not empty-data zero", async
     await reader.close();
   }
 });
+
+it("bounds retained metadata independently of small decoded byte counts", async () => {
+  const members = Array.from({ length: 100 }, (_, index) => ({
+    name: `empty-${index}`,
+    mode: MODE.file,
+  }));
+  const reader = new CpioArtifactReader(
+    async () => Readable.from([gzipCpio(members)]),
+    "fail",
+    new ArtifactDecodedBudget(1024 * 1024, 32 * 1024),
+  );
+  let seen = 0;
+  try {
+    await expect(
+      (async () => {
+        for await (const entry of reader.entries()) {
+          void entry;
+          seen++;
+        }
+      })(),
+    ).rejects.toMatchObject({
+      reason: "limit",
+      message: expect.stringContaining("Retained archive metadata budget"),
+    });
+    expect(seen).toBeGreaterThan(0);
+    expect(seen).toBeLessThan(members.length);
+  } finally {
+    await reader.close();
+  }
+});
+
+it("recovers directory CRC contradictions before yielding and reaches regular siblings", async () => {
+  const reader = new CpioArtifactReader(
+    async () =>
+      Readable.from([
+        gzipCpio(
+          [
+            { name: "dir", mode: MODE.directory, check: 1 },
+            { name: "dir/good", mode: MODE.file, data: "ok" },
+          ],
+          "crc",
+        ),
+      ]),
+    "record-and-continue",
+  );
+  try {
+    const seen: string[] = [];
+    for await (const entry of reader.entries()) {
+      seen.push(entry.path);
+      if (entry.kind === "directory")
+        expect(entry.limitations).toContain(
+          "cpio CRC disagrees with content: dir",
+        );
+      else
+        expect((await buffer(await reader.open(entry))).toString()).toBe("ok");
+    }
+    expect(seen).toEqual(["dir", "dir/good"]);
+  } finally {
+    await reader.close();
+  }
+});

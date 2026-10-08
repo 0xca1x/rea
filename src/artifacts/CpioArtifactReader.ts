@@ -329,6 +329,7 @@ export class CpioArtifactReader implements ArtifactReader {
           "cpio member name is not valid UTF-8",
         );
       }
+      this.decodedBudget.consumeEntry(raw);
       if (raw === TRAILER) {
         if (header.fileSize !== 0)
           throw new ArtifactReaderFailure(
@@ -352,6 +353,20 @@ export class CpioArtifactReader implements ArtifactReader {
   ): AsyncGenerator<ArtifactEntry> {
     const type = header.mode & S_IFMT;
     const path = memberPath(raw);
+    if (type === S_IFDIR) {
+      const verified = await this.#recoverIntegrity(() =>
+        drain(this.#verified(source, header, raw)),
+      );
+      if (path !== undefined)
+        yield entryOf({
+          path,
+          kind: "directory",
+          key,
+          header,
+          limitations: "mismatch" in verified ? [verified.mismatch] : [],
+        });
+      return;
+    }
     if (type === S_IFLNK) {
       yield* this.#symlink(source, { header, raw, key }, path);
       return;
@@ -395,7 +410,7 @@ export class CpioArtifactReader implements ArtifactReader {
     this.#current = { key, path: raw, header };
     this.#consumed = false;
     if (path === undefined) return;
-    if (type !== S_IFREG && type !== S_IFDIR) {
+    if (type !== S_IFREG) {
       // FIFOs, device nodes, sockets and other types are not expanded; keep
       // an explicit unavailable occurrence instead of dropping the path.
       const verified = await this.#recoverIntegrity(() =>
@@ -418,7 +433,7 @@ export class CpioArtifactReader implements ArtifactReader {
     }
     yield entryOf({
       path,
-      kind: type === S_IFDIR ? "directory" : "file",
+      kind: "file",
       key,
       header,
       limitations: [],
