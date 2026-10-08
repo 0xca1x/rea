@@ -65,6 +65,8 @@ export const dyldSharedCacheResultSchema = z.object({
   images_total: z.number().int().nonnegative(),
   images: z.array(z.object({ path: z.string(), address: hexSchema })),
   inspected_images: z.array(inspectedImageSchema),
+  /** SHA-256 of every readable subcache backing inspected images, keyed by suffix. */
+  subcache_sha256: z.record(z.string(), digestSchema).default({}),
   coverage: z.object({
     status: z.enum(["complete", "partial"]),
     unreadable_subcaches: z.array(z.string()),
@@ -82,4 +84,5 @@ export type InspectedCacheImage = z.infer<typeof inspectedImageSchema>;
 export const DYLD_SHARED_CACHE_LIMITATIONS = [
   "The cache describes the operating system it was built for; it is evidence about this cache file set, not about another host.",
   "Image headers are read through the cache's VM mappings; slide info, local symbols, and code signatures are not parsed, and images are not extracted.",
+  "Install paths are matched exactly against the cache image table; dyld alias canonicalization is not modeled, so an alias may report absent or undetermined though dyld would load it from the cache.",
 ];

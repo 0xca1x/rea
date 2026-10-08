@@ -18,22 +18,42 @@ export const deriveFindings = (
   edges.forEach((edge, index) => {
     if (edge.resolution.status === "unresolved")
       findings.push(unresolvedFinding(edge, index));
+    if (edge.resolution.status === "unresolved" && edge.loader_conditional) {
+      // loader_conditional already qualifies the unresolved explanation.
+    }
     const resolvedAt = edge.candidates.findIndex(
       ({ outcome }) => outcome === "resolved" || outcome === "shared-cache",
     );
-    const earlier = edge.candidates
+    const earlierAbsent = edge.candidates
       .slice(0, Math.max(resolvedAt, 0))
       .filter(
         ({ source, outcome }) => source === "rpath" && outcome === "absent",
       )
       .map(({ path }) => path);
-    if (resolvedAt > 0 && earlier.length > 0)
+    const earlierUnknown = edge.candidates
+      .slice(0, Math.max(resolvedAt, 0))
+      .some(({ outcome }) =>
+        [
+          "outside-target",
+          "escapes-target",
+          "unsupported",
+          "undetermined",
+        ].includes(outcome),
+      );
+    const loaderQualifies =
+      edge.loader_conditional === true
+        ? " This loader itself loads only conditionally; if it never loads, this search never occurs."
+        : "";
+    const unknownQualifies = earlierUnknown
+      ? " An earlier candidate outside the analyzed root may still win at runtime, so this fallback loads only conditionally."
+      : "";
+    if (resolvedAt > 0 && earlierAbsent.length > 0)
       findings.push({
         kind: "earlier-rpath-candidate-absent",
         edge_index: index,
         image: edge.loader,
         basis: "derived",
-        explanation: `dyld searches ${earlier.join(", ")} before ${edge.resolution.image ?? edge.install_name}. A Mach-O placed at an earlier path would load first unless code-signing library validation rejects it; library validation is not evaluated here (see inspect_signature).`,
+        explanation: `dyld searches ${earlierAbsent.join(", ")} before ${edge.resolution.image ?? edge.install_name}. A Mach-O placed at an earlier path would load first unless code-signing library validation rejects it; library validation is not evaluated here (see inspect_signature).${loaderQualifies}${unknownQualifies}`,
       });
   });
   for (const { image, architecture } of roots) {
@@ -134,7 +154,7 @@ export const sharedCacheLimitations = (
       "Absolute install names and rpaths are outside the analyzed root and are not evaluated, including /System and /usr/lib libraries that the dyld shared cache usually provides. Pass shared_cache to look them up in a cache.",
     ];
   return [
-    "Absolute install names and rpaths were looked up only in the supplied dyld shared cache; paths it does not list stay outside-target because the host filesystem outside the analyzed root is not read. On another OS build the cache contents, and therefore these outcomes, can differ.",
+    "Absolute install names and rpaths were looked up only in the supplied dyld shared cache; paths it does not list stay outside-target because the host filesystem outside the analyzed root is not read. Shared-cache hits assume no on-disk override (root or unzippered twin) though dyld checks the filesystem first; treat them as conditional when the external disk state is unknown. On another OS build the cache contents, and therefore these outcomes, can differ.",
     ...unserved.map(
       ({ image, architecture, reason }) =>
         `The supplied shared cache was not used for ${image} (${architecture}): ${reason}. Its absolute paths stay outside-target.`,

@@ -378,6 +378,16 @@ export const traceDylibLoading = async (
   const unparsed = reported
     .filter(([, facts]) => facts.status !== "parsed")
     .map(([path]) => path);
+  // LC_DYLD_ENVIRONMENT can prepend search paths dyld honors at launch; its
+  // settings are reported but not modeled, so resolutions stay conditional.
+  const environmentRoots = roots.filter(({ image, architecture }) => {
+    const facts = images.get(image);
+    return (
+      facts?.status === "parsed" &&
+      (facts.slices.find((s) => s.architecture === architecture)
+        ?.dyld_environment.length ?? 0) > 0
+    );
+  });
   return {
     roots,
     images: reported.map(([path, facts]) => ({
@@ -397,7 +407,8 @@ export const traceDylibLoading = async (
       status:
         unparsed.length === 0 &&
         withoutArchitecture.length === 0 &&
-        unverifiedCacheImages.size === 0
+        unverifiedCacheImages.size === 0 &&
+        environmentRoots.length === 0
           ? "complete"
           : "partial",
       unparsed_images: unparsed,
@@ -407,6 +418,11 @@ export const traceDylibLoading = async (
     limitations: [
       ...DYLIB_RESOLUTION_LIMITATIONS,
       ...sharedCacheLimitations(request.sharedCache, unserved),
+      ...(environmentRoots.length === 0
+        ? []
+        : [
+            `Roots ${environmentRoots.map(({ image }) => image).join(", ")} set dyld environment variables through LC_DYLD_ENVIRONMENT; their resolutions are conditional because those search paths are not modeled.`,
+          ]),
     ],
   };
 };

@@ -87,11 +87,17 @@ export const traceDylibResolution = async (options: {
   readonly signal?: AbortSignal;
 }): Promise<DylibResolutionResult> => {
   const parsed = dylibResolutionInputSchema.safeParse(options.parameters);
-  if (!parsed.success)
+  if (!parsed.success) {
+    const issue = parsed.error.issues[0];
+    const at =
+      issue !== undefined && issue.path.length > 0
+        ? ` (${issue.path.join(".")} ${issue.message})`
+        : "";
     throw new ArtifactReaderFailure(
       "path",
-      "roots must be normalized paths relative to the analyzed root",
+      `dylib resolution parameters are invalid${at}`,
     );
+  }
   let cache: DyldSharedCache | undefined;
   // Canonicalization is inside the translated region: a revoked permission
   // keeps its reason and path.

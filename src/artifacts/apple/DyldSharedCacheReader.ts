@@ -90,7 +90,7 @@ class CacheFile {
       );
     if (length > BLOCK_BYTES) {
       const bytes = Buffer.alloc(length);
-      await this.handle.read(bytes, 0, length, offset);
+      await this.readInto(bytes, 0, length, offset);
       return bytes;
     }
     const chunks: Buffer[] = [];
@@ -100,7 +100,7 @@ class CacheFile {
       if (block === undefined) {
         const start = index * BLOCK_BYTES;
         block = Buffer.alloc(Math.min(BLOCK_BYTES, this.size - start));
-        await this.handle.read(block, 0, block.length, start);
+        await this.readInto(block, 0, block.length, start);
         this.#blocks.set(index, block);
       }
       const from = position - index * BLOCK_BYTES;
@@ -111,6 +111,30 @@ class CacheFile {
     return chunks.length === 1
       ? (chunks[0] ?? Buffer.alloc(0))
       : Buffer.concat(chunks);
+  }
+
+  /** Positional read that retries short reads; slow filesystems may return partial data. */
+  private async readInto(
+    target: Buffer,
+    targetOffset: number,
+    length: number,
+    position: number,
+  ): Promise<void> {
+    let done = 0;
+    while (done < length) {
+      const { bytesRead } = await this.handle.read(
+        target,
+        targetOffset + done,
+        length - done,
+        position + done,
+      );
+      if (bytesRead === 0)
+        throw new ArtifactReaderFailure(
+          "format",
+          `dyld cache read at ${hex(position)} is truncated`,
+        );
+      done += bytesRead;
+    }
   }
 
   async cString(offset: number): Promise<string> {
@@ -264,12 +288,26 @@ export class DyldSharedCache {
       const header = DyldSharedCache.#summary(parsed, parsedFiles, statuses);
       const images = await DyldSharedCache.#images(main, parsed, signal);
       const regions = parsedFiles.flatMap(({ file, parsed: item }) =>
-        item.mappings.map((mapping) => ({
-          file,
-          address: safeNumber(mapping.address, "mapping address"),
-          size: safeNumber(mapping.size, "mapping size"),
-          fileOffset: safeNumber(mapping.fileOffset, "mapping file offset"),
-        })),
+        item.mappings.map((mapping) => {
+          const fileOffset = safeNumber(
+            mapping.fileOffset,
+            "mapping file offset",
+          );
+          const size = safeNumber(mapping.size, "mapping size");
+          // A truncated file that declares mappings beyond its bytes cannot
+          // map those addresses; drop the unverified extent.
+          if (fileOffset < 0 || size < 0 || fileOffset + size > file.size)
+            throw new ArtifactReaderFailure(
+              "format",
+              `dyld cache mapping in ${file.suffix === "" ? "the main file" : `subcache ${file.suffix}`} extends beyond its file`,
+            );
+          return {
+            file,
+            address: safeNumber(mapping.address, "mapping address"),
+            size,
+            fileOffset,
+          };
+        }),
       );
       return new DyldSharedCache(header, images, files, regions);
     } catch (cause: unknown) {
@@ -472,14 +510,31 @@ export class DyldSharedCache {
     const main = this.files[0];
     if (main === undefined)
       throw new ArtifactReaderFailure("format", "dyld cache has no main file");
+    return this.hashFile(main, signal);
+  }
+
+  /** SHA-256 of every readable subcache, keyed by suffix, through their open handles. */
+  async subcacheSha256(signal?: AbortSignal): Promise<Record<string, string>> {
+    const out: Record<string, string> = {};
+    for (const file of this.files.slice(1)) {
+      signal?.throwIfAborted();
+      out[file.suffix] = await this.hashFile(file, signal);
+    }
+    return out;
+  }
+
+  private async hashFile(
+    file: { readonly handle: FileHandle; readonly size: number },
+    signal?: AbortSignal,
+  ): Promise<string> {
     const hash = createHash("sha256");
     const buffer = Buffer.alloc(HASH_CHUNK_BYTES);
-    for (let position = 0; position < main.size;) {
+    for (let position = 0; position < file.size;) {
       signal?.throwIfAborted();
-      const { bytesRead } = await main.handle.read(
+      const { bytesRead } = await file.handle.read(
         buffer,
         0,
-        Math.min(buffer.length, main.size - position),
+        Math.min(buffer.length, file.size - position),
         position,
       );
       if (bytesRead === 0) break;

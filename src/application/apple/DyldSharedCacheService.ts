@@ -108,12 +108,17 @@ export const inspectDyldSharedCache = async (
     const unreadable = cache.header.subcaches
       .filter(({ status }) => status !== "present")
       .map(({ suffix }) => suffix);
+    // Hash through the open handles the header was parsed from, so a path
+    // replacement mid-inspection cannot attribute new bytes to old facts.
+    const mainSha = await cache.mainSha256(signal);
+    const subcacheSha = await cache.subcacheSha256(signal);
     return ok(
       dyldSharedCacheResultSchema.parse({
         cache_path: cachePath,
         // The header and image list were read through this same handle.
-        main_file_sha256: await cache.mainSha256(signal),
+        main_file_sha256: mainSha,
         ...cache.header,
+        subcache_sha256: subcacheSha,
         images_total: cache.images.length,
         images: cache.images.map(({ path, address }) => ({
           path,

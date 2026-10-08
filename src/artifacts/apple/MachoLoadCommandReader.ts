@@ -271,6 +271,13 @@ const decodeCommands = (
     decodeCommand(command, body, index, slice);
     offset += size;
   }
+  // A header that declares fewer commands than its sizeofcmds could hide
+  // dependency loads in the unconsumed bytes.
+  if (offset !== bytes.byteLength)
+    throw new MachoFormatIssue(
+      "malformed",
+      `load commands declare ${header.commandCount} commands but sizeofcmds holds ${bytes.byteLength} bytes`,
+    );
   return slice;
 };
 

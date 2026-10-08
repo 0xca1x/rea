@@ -37,7 +37,13 @@ export const resolveTreePath = async (
     if (entry.kind === "symlink") {
       hops += 1;
       if (hops > MAX_SYMLINK_HOPS) return { kind: "absent" };
-      if (entry.target.startsWith("/")) return { kind: "escapes" };
+      if (
+        entry.target.startsWith("/") ||
+        /^[a-zA-Z]:[\\/]/u.test(entry.target) ||
+        entry.target.startsWith("\\\\") ||
+        entry.target.startsWith("//")
+      )
+        return { kind: "escapes" };
       pending.unshift(...segmentsOf(entry.target));
       continue;
     }
