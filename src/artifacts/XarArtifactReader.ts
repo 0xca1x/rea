@@ -49,11 +49,19 @@ interface XarData {
   readonly extractedChecksum:
     | { readonly algorithm: string; readonly value: string }
     | undefined;
+  readonly unsupportedChecksum:
+    | { readonly style: string; readonly value: string }
+    | undefined;
+  readonly archivedChecksum:
+    | { readonly algorithm: string; readonly value: string }
+    | undefined;
 }
 
 interface XarMember {
   readonly path: string;
   readonly kind: "file" | "directory" | "symlink";
+  /** Raw TOC type when it is not file/directory/symlink (FIFO, device, ...). */
+  readonly unsupportedType?: string;
   readonly mode: number | null;
   readonly data: XarData | undefined;
   readonly link: string | undefined;
@@ -83,11 +91,27 @@ const integer = (value: string | undefined, label: string): number => {
   return parsed;
 };
 
+const parseChecksum = (
+  parent: Element,
+  tag: string,
+):
+  | { readonly algorithm: string; readonly value: string }
+  | { readonly unsupported: string; readonly value: string }
+  | undefined => {
+  const element = childElement(parent, tag);
+  if (element === undefined) return undefined;
+  const style = element.getAttribute("style")?.toLowerCase() ?? "";
+  const value = (element.textContent ?? "").trim().toLowerCase();
+  if (CHECKSUM_ALGORITHMS[style] === undefined)
+    return { unsupported: style || "(missing style)", value };
+  return { algorithm: style, value };
+};
+
 const parseData = (file: Element): XarData | undefined => {
   const data = childElement(file, "data");
   if (data === undefined) return undefined;
-  const checksum = childElement(data, "extracted-checksum");
-  const style = checksum?.getAttribute("style")?.toLowerCase() ?? "";
+  const extracted = parseChecksum(data, "extracted-checksum");
+  const archived = parseChecksum(data, "archived-checksum");
   return {
     offset: integer(textOf(data, "offset"), "data offset"),
     length: integer(textOf(data, "length"), "data length"),
@@ -96,12 +120,17 @@ const parseData = (file: Element): XarData | undefined => {
       childElement(data, "encoding")?.getAttribute("style") ??
       "application/octet-stream",
     extractedChecksum:
-      checksum === undefined || CHECKSUM_ALGORITHMS[style] === undefined
+      extracted === undefined || "unsupported" in extracted
         ? undefined
-        : {
-            algorithm: style,
-            value: (checksum.textContent ?? "").trim().toLowerCase(),
-          },
+        : { algorithm: extracted.algorithm, value: extracted.value },
+    unsupportedChecksum:
+      extracted !== undefined && "unsupported" in extracted
+        ? { style: extracted.unsupported, value: extracted.value }
+        : undefined,
+    archivedChecksum:
+      archived === undefined || "unsupported" in archived
+        ? undefined
+        : { algorithm: archived.algorithm, value: archived.value },
   };
 };
 
@@ -134,12 +163,25 @@ const collectMembers = (toc: Element): XarMember[] => {
         ? "directory"
         : type === "symlink"
           ? "symlink"
-          : "file";
+          : type === undefined || type === "file"
+            ? "file"
+            : "file";
+    const unsupportedType =
+      type !== undefined &&
+      type !== "file" &&
+      type !== "directory" &&
+      type !== "symlink"
+        ? type
+        : undefined;
     members.push({
       path,
       kind,
+      ...(unsupportedType === undefined ? {} : { unsupportedType }),
       mode: Number.isSafeInteger(mode) ? mode : null,
-      data: kind === "file" ? parseData(next.element) : undefined,
+      data:
+        kind === "file" && unsupportedType === undefined
+          ? parseData(next.element)
+          : undefined,
       link: kind === "symlink" ? textOf(next.element, "link") : undefined,
     });
     pending.push(
@@ -166,6 +208,47 @@ const declaredDigest = (
       }
     : { declaredSha256: null };
 };
+
+/** Bound decoded output to the TOC-declared extracted size. */
+class SizeBound extends Transform {
+  #seen = 0;
+
+  constructor(
+    private readonly path: string,
+    private readonly expected: number,
+  ) {
+    super();
+  }
+
+  override _transform(
+    chunk: Buffer,
+    _encoding: BufferEncoding,
+    done: TransformCallback,
+  ): void {
+    this.#seen += chunk.length;
+    if (this.#seen > this.expected) {
+      done(
+        new ArtifactReaderFailure(
+          "limit",
+          `xar member ${this.path} decodes beyond its declared ${this.expected} bytes`,
+        ),
+      );
+      return;
+    }
+    done(null, chunk);
+  }
+
+  override _flush(done: TransformCallback): void {
+    done(
+      this.#seen === this.expected
+        ? null
+        : new ArtifactReaderFailure(
+            "format",
+            `xar member ${this.path} decoded ${this.#seen} bytes, expected ${this.expected}`,
+          ),
+    );
+  }
+}
 
 /** Verify a member's extracted checksum as its decoded bytes stream past. */
 class ChecksumVerifier extends Transform {
@@ -295,9 +378,14 @@ export class XarArtifactReader implements ArtifactReader {
   /** The TOC checksum in the heap covers the compressed TOC bytes. */
   async #verifyToc(toc: Element, compressed: Buffer): Promise<void> {
     const checksum = childElement(toc, "checksum");
+    if (checksum === undefined) return;
     const style = checksum?.getAttribute("style")?.toLowerCase() ?? "";
     const algorithm = CHECKSUM_ALGORITHMS[style];
-    if (checksum === undefined || algorithm === undefined) return;
+    if (algorithm === undefined)
+      throw new ArtifactReaderFailure(
+        "format",
+        `xar TOC declares unsupported checksum style ${style || "(missing)"}`,
+      );
     const size = integer(textOf(checksum, "size"), "checksum size");
     // The stored checksum is exactly one digest; never allocate a declared size.
     if (size !== DIGEST_BYTES[style])
@@ -377,10 +465,45 @@ export class XarArtifactReader implements ArtifactReader {
     await this.#load(signal);
     for (const member of this.#members) {
       cancelled(signal);
+      if (member.unsupportedType !== undefined) {
+        yield {
+          path: member.path,
+          kind: "file",
+          declaredSize: null,
+          compressedSize: null,
+          executable: false,
+          encrypted: false,
+          byteOffset: null,
+          declaredSha256: null,
+          unpacked: false,
+          limitations: [
+            `Unsupported xar member type ${member.unsupportedType}; content not expanded.`,
+          ],
+          adapterKey: member.path,
+          contentUnavailable: true,
+        };
+        continue;
+      }
+      const data = member.data;
+      // Raw members must describe their stored bytes exactly; otherwise the
+      // source range would extend into adjacent heap entries.
+      if (
+        data !== undefined &&
+        data.encoding === "application/octet-stream" &&
+        data.size !== data.length
+      )
+        throw new ArtifactReaderFailure(
+          "format",
+          `xar member ${member.path} declares size ${data.size} with length ${data.length}`,
+        );
+      const unsupportedChecksum = data?.unsupportedChecksum;
       const classified =
-        member.kind === "file"
+        member.kind === "file" && unsupportedChecksum === undefined
           ? await this.#nestedArchive(member)
-          : { nested: undefined, limitations: [] };
+          : {
+              nested: undefined as XarNestedArchive | undefined,
+              limitations: [] as readonly string[],
+            };
       yield {
         path: member.path,
         kind: member.kind,
@@ -398,6 +521,11 @@ export class XarArtifactReader implements ArtifactReader {
           ...(member.kind === "symlink" && member.link !== undefined
             ? [`Symlink target recorded in the TOC: ${member.link}`]
             : []),
+          ...(unsupportedChecksum === undefined
+            ? []
+            : [
+                `Member declares unsupported checksum ${unsupportedChecksum.style}; integrity not verified.`,
+              ]),
           ...classified.limitations,
         ],
         adapterKey: member.path,
@@ -417,18 +545,50 @@ export class XarArtifactReader implements ArtifactReader {
         "path",
         `xar member is not a file: ${entry.path}`,
       );
+    if (member.unsupportedType !== undefined)
+      throw new ArtifactReaderFailure(
+        "unavailable",
+        `xar member ${entry.path} has unsupported type ${member.unsupportedType}`,
+      );
     const data = member.data;
     if (data === undefined) return Readable.from([]);
+    if (entry.contentUnavailable === true)
+      throw new ArtifactReaderFailure(
+        "unavailable",
+        `xar member ${entry.path} is not expandable`,
+      );
+    // Raw members must describe their stored bytes exactly.
+    if (
+      data.encoding === "application/octet-stream" &&
+      data.size !== data.length
+    )
+      throw new ArtifactReaderFailure(
+        "format",
+        `xar member ${entry.path} declares size ${data.size} with length ${data.length}`,
+      );
+    const archived = data.archivedChecksum;
+    const archivedVerifier =
+      archived === undefined || !this.#verifyChecksums
+        ? undefined
+        : new ChecksumVerifier(`${entry.path} (archived)`, archived);
     const raw = Readable.from(this.#chunks(data.offset, data.length, signal));
+    const archivedChecked =
+      archivedVerifier === undefined ? raw : raw.pipe(archivedVerifier);
     let decoded: Readable;
-    if (data.encoding === "application/octet-stream") decoded = raw;
+    if (data.encoding === "application/octet-stream") decoded = archivedChecked;
     else if (data.encoding === "application/x-gzip") {
-      // xar's "x-gzip" members are zlib streams.
+      // xar's "x-gzip" members are zlib streams; bound decoded output to the
+      // declared extracted size so a gzip bomb cannot exhaust the process.
       const inflate = createInflate();
       raw.on("error", (cause: unknown) =>
         inflate.destroy(memberFailure(entry.path, cause)),
       );
-      decoded = raw.pipe(inflate);
+      const inflated = archivedChecked.pipe(inflate);
+      const bounded = new SizeBound(entry.path, data.size);
+      inflated.on("error", (cause: unknown) =>
+        bounded.destroy(memberFailure(entry.path, cause)),
+      );
+      decoded = inflated.pipe(bounded);
     } else
       throw new ArtifactReaderFailure(
         "format",

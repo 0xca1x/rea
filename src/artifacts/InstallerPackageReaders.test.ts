@@ -199,6 +199,7 @@ describe("gzip cpio reader", () => {
         "directory:usr",
         "file:usr/bin/tool",
         "symlink:usr/lib/link",
+        "file:usr/fifo",
         "file:usr/share/readme.txt",
       ]);
     });

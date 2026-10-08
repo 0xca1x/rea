@@ -233,9 +233,24 @@ export class CpioArtifactReader implements ArtifactReader {
   ) {}
 
   async *entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry> {
-    const source = new ByteSource(
-      (await this.openCompressed(signal)).pipe(createGunzip()),
-    );
+    const compressed = await this.openCompressed(signal);
+    const gunzip = createGunzip();
+    // `pipe()` does not forward source errors (cancellation, truncation);
+    // propagate them so the MCP process fails as a tagged Artifact failure.
+    compressed.on("error", (cause: unknown) => {
+      gunzip.destroy(
+        cause instanceof ArtifactReaderFailure
+          ? cause
+          : new ArtifactReaderFailure("format", "cpio stream failed", {
+              cause,
+            }),
+      );
+    });
+    gunzip.on("error", () => {
+      // Prevent unhandled source errors after the decoder fails first.
+      compressed.destroy();
+    });
+    const source = new ByteSource(compressed.pipe(gunzip));
     this.#source = source;
     for (let index = 0; ; index++) {
       if (signal?.aborted === true)
@@ -257,12 +272,18 @@ export class CpioArtifactReader implements ArtifactReader {
           "name padding",
         ),
       );
-      const end = nameBytes.indexOf(0);
-      const raw = nameBytes.toString(
-        "utf8",
-        0,
-        end >= 0 ? end : nameBytes.length,
-      );
+      // cpio names require exactly one terminal NUL: a missing terminator or
+      // an embedded NUL with trailing bytes is malformed.
+      if (
+        nameBytes.length === 0 ||
+        nameBytes[nameBytes.length - 1] !== 0 ||
+        nameBytes.indexOf(0) !== nameBytes.length - 1
+      )
+        throw new ArtifactReaderFailure(
+          "format",
+          "cpio member name is not NUL-terminated",
+        );
+      const raw = nameBytes.toString("utf8", 0, nameBytes.length - 1);
       if (raw === TRAILER) {
         yield* this.#unresolvedLinks();
         return;
@@ -305,12 +326,19 @@ export class CpioArtifactReader implements ArtifactReader {
       header.links > 1 &&
       header.fileSize === 0
     ) {
+      // Zero-size headers carry no bytes, so a CRC archive must declare zero.
+      if (header.format === "crc" && header.check !== 0)
+        throw new ArtifactReaderFailure(
+          "integrity",
+          `cpio CRC disagrees with content: ${raw}`,
+        );
       const stored = this.#links.get(header.identity);
       if (stored !== undefined) {
         yield this.#alias(path, key, header, stored);
         return;
       }
       // newc stores a hard link's bytes on its last member; wait for them.
+      // An all-empty group is resolved to empty files at TRAILER!!!.
       const waiting = this.#pending.get(header.identity) ?? [];
       waiting.push({ path, key, header });
       this.#pending.set(header.identity, waiting);
@@ -318,7 +346,26 @@ export class CpioArtifactReader implements ArtifactReader {
     }
     this.#current = { key, path: raw, header };
     this.#consumed = false;
-    if (path === undefined || (type !== S_IFREG && type !== S_IFDIR)) return;
+    if (path === undefined) return;
+    if (type !== S_IFREG && type !== S_IFDIR) {
+      // FIFOs, device nodes, sockets and other types are not expanded; keep
+      // an explicit unavailable occurrence instead of dropping the path.
+      yield entryOf({
+        path,
+        kind: "file",
+        key,
+        header,
+        size: null,
+        limitations: [
+          `Unsupported cpio member type ${type.toString(8)}; content not expanded.`,
+        ],
+        contentUnavailable: true,
+      });
+      // Consume its data (if any) so the next header aligns.
+      await drain(this.#verified(source, header, raw));
+      this.#current = undefined;
+      return;
+    }
     yield entryOf({
       path,
       kind: type === S_IFDIR ? "directory" : "file",
@@ -349,7 +396,27 @@ export class CpioArtifactReader implements ArtifactReader {
 
   *#unresolvedLinks(): Generator<ArtifactEntry> {
     for (const links of this.#pending.values())
-      for (const { path, key, header } of links)
+      for (const { path, key, header } of links) {
+        // A complete zero-length group establishes empty content. An orphan
+        // that claims more links than appear is missing its bytes.
+        const complete =
+          links.length >= header.links &&
+          links.every((m) => m.header.fileSize === 0);
+        if (header.fileSize === 0 && complete) {
+          const empty = Buffer.alloc(0);
+          this.#aliases.set(key, empty);
+          yield entryOf({
+            path,
+            kind: "file",
+            key,
+            header,
+            size: 0,
+            limitations: [
+              "Hard link: every member of this link group is empty.",
+            ],
+          });
+          continue;
+        }
         yield entryOf({
           path,
           kind: "file",
@@ -359,6 +426,7 @@ export class CpioArtifactReader implements ArtifactReader {
           limitations: [UNRESOLVED_LINK],
           contentUnavailable: true,
         });
+      }
     this.#pending.clear();
   }
 

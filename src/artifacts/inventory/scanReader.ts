@@ -204,11 +204,42 @@ const digestArtifactEntry = async (
   )
     return undefined;
   const checksum = entry.declaredChecksum;
-  const digest = await hashReadable(
-    await currentReader.open(entry, context.signal),
-    context.signal,
-    checksum?.algorithm,
-  );
+  let digest: Awaited<ReturnType<typeof hashReadable>>;
+  try {
+    digest = await hashReadable(
+      await currentReader.open(entry, context.signal),
+      context.signal,
+      checksum?.algorithm,
+    );
+  } catch (cause: unknown) {
+    // A CRC, archived-checksum, or size-bound failure while streaming is an
+    // integrity mismatch for this member, not the whole inspection, when the
+    // caller selected record-and-continue.
+    if (
+      context.integrity.mode !== "record-and-continue" ||
+      !(cause instanceof ArtifactReaderFailure) ||
+      (cause.reason !== "integrity" &&
+        cause.reason !== "limit" &&
+        cause.reason !== "format")
+    )
+      throw cause;
+    return {
+      node: createArtifactNode({
+        sha256:
+          "0000000000000000000000000000000000000000000000000000000000000000",
+        size: 0,
+        kind: "resource",
+        format: "unknown",
+        executable: entry.executable,
+        contentState: "embedded",
+        limitations: [
+          "Observed content contradicts declared integrity metadata and is untrusted.",
+        ],
+      }),
+      mismatched: true,
+      mismatchDetails: [cause.message],
+    };
+  }
   const sha256Mismatch =
     entry.declaredSha256 !== null && entry.declaredSha256 !== digest.sha256;
   const checksumMismatch =
