@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
-import { lstat, open, readdir } from "node:fs/promises";
-import { dirname, join } from "node:path";
+import { lstat, open } from "node:fs/promises";
+import { join } from "node:path";
 
 import type { InspectSignature } from "../domain/native/nativeInspection.js";
 import { ticketStructureIssue } from "./NotarizationTicket.js";
@@ -238,86 +238,3 @@ export const SIGNATURE_POSTURE_LIMITATIONS = [
   "Security facets are derived from CodeDirectory flags and entitlements; runtime policy such as System Integrity Protection, AMFI, and setuid bits can further restrict a process.",
   "Ticket presence requires recognized local s8ch/g8tk container and DER framing; certificate authenticity, ticket signature validity, and ticket-to-code binding are not verified.",
 ];
-
-/**
- * codesign prints one nested path per line, so a path that contains a newline
- * is split into fragments. A reported path that does not exist on disk is
- * named in a limitation instead of being trusted as complete. An existing
- * reported path is still ambiguous when it could be the first line of a
- * longer newline-containing path: either a diagnostic fragment completes it,
- * or its parent directory holds an entry with an embedded newline.
- */
-export const unconfirmedNestedCode = async (
-  verification: NonNullable<InspectSignature["verification"]>,
-): Promise<string[]> => {
-  const missing: string[] = [];
-  const ambiguous: string[] = [];
-  const denied: string[] = [];
-  for (const validatedPath of verification.validated_nested_code) {
-    try {
-      await lstat(validatedPath);
-    } catch (cause: unknown) {
-      const code = errorCode(cause);
-      // A denied lookup cannot confirm the path, but is no sign of a split one.
-      if (code === "EACCES" || code === "EPERM") {
-        denied.push(
-          `Could not confirm completeness of codesign nested path ${JSON.stringify(validatedPath)}: permission denied (${code}); the reported path may be a fragment.`,
-        );
-        continue;
-      }
-      if (code !== "ENOENT" && code !== "ENOTDIR") throw cause;
-      missing.push(validatedPath);
-      continue;
-    }
-    if (await isNewlineFragment(validatedPath, verification.diagnostics)) {
-      ambiguous.push(validatedPath);
-    }
-  }
-  return [
-    ...denied,
-    ...missing.map(
-      (path) =>
-        `codesign reported validated nested code at ${JSON.stringify(path)}, which does not exist; a nested path probably contains a newline, so validated_nested_code and diagnostics hold fragments of it.`,
-    ),
-    ...ambiguous.map(
-      (path) =>
-        `codesign reported validated nested code at ${JSON.stringify(path)}, which exists but could be the first line of a nested path containing a newline; validated_nested_code is ambiguous and should not be trusted as complete.`,
-    ),
-  ];
-};
-
-/**
- * Whether an existing validated path could be a newline-split fragment: a
- * diagnostic line completes it to an existing path, or its parent directory
- * contains an entry with an embedded newline whose first line matches it.
- */
-const isNewlineFragment = async (
-  validated: string,
-  diagnostics: readonly string[],
-): Promise<boolean> => {
-  for (const fragment of diagnostics) {
-    if (fragment.length === 0 || fragment.includes("\n")) continue;
-    // A continuation line is a bare fragment, not a `key: value` diagnostic.
-    if (fragment.includes(":") || fragment.includes(" ")) continue;
-    try {
-      await lstat(`${validated}\n${fragment}`);
-      return true;
-    } catch {
-      // Not completed by this diagnostic line; check directory entries below.
-    }
-  }
-  try {
-    const entries = await readdir(dirname(validated));
-    const base = validated.slice(dirname(validated).length + 1);
-    for (const entry of entries) {
-      if (!entry.includes("\n")) continue;
-      if (entry.split("\n")[0] === base) return true;
-      // A suffix beginning with `--validated:` can inject a second record;
-      // any newline entry in the same directory makes each record suspect.
-      return true;
-    }
-  } catch {
-    return false;
-  }
-  return false;
-};

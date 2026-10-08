@@ -105,6 +105,13 @@ flags. It checks that `inspect-signature` decodes those flags and derives the
 expected security facets. It also checks a platform binary, which must report a
 platform identifier and pass the `anchor apple` origin check, and bundles with an added unsealed file, at the top level
 and inside a nested XPC service, which must fail deep strict verification. CLI and stdio MCP results must match.
+The default lane explicitly reports real stapled-ticket coverage as unverified:
+its source-built ad hoc fixtures cannot receive genuine Apple notarization tickets.
+To verify ticket producer output through CLI and MCP, supply an existing stapled app:
+`npm run verify:code-signature -- --stapled-app "/Applications/Firefox.app"`.
+This optional subcase preflights `xcrun stapler`, validates the selected app with
+Apple's tool, and checks that both REA surfaces return the same ticket digest and
+`present` framing observation. It does not install an app or submit anything for notarization.
 `verify:macos-bundle` needs only macOS with Command Line Tools. It compiles a
 source-owned app with `clang`: a versioned framework, XPC services, an app
 extension, a login item, a privileged helper, launchd plists, and a helper tool,

@@ -32,8 +32,8 @@ import {
   SIGNATURE_POSTURE_LIMITATIONS,
   signedCodePath,
   stapledTicket,
-  unconfirmedNestedCode,
 } from "./NativeSignaturePosture.js";
+import { unconfirmedNestedCode } from "./NativeNestedCode.js";
 
 interface SignatureDisplays {
   readonly display: NativeCommandCapture;
@@ -143,7 +143,7 @@ export const inspectNativeSignature = async (options: {
     ...parsed.limitations,
     ...SIGNATURE_POSTURE_LIMITATIONS,
     ...slices.value.limitations,
-    ...(await unconfirmedNestedCode(verification)),
+    ...(await unconfirmedNestedCode(verification, signal)),
   ];
   if (entitlementValue.omittedPrototypeKeys !== 0)
     limitations.push(

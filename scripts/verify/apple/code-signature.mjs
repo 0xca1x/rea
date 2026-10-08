@@ -24,6 +24,20 @@ import {
 
 const exec = promisify(execFile);
 
+const args = process.argv.slice(2);
+if (args.length !== 0 && (args.length !== 2 || args[0] !== "--stapled-app"))
+  throw new Error("Usage: verify:code-signature [--stapled-app PATH]");
+const stapledApp = args[1];
+if (stapledApp !== undefined) {
+  try {
+    await exec("/usr/bin/xcrun", ["--find", "stapler"]);
+  } catch (cause) {
+    throw new Error("Real stapled-ticket verification requires xcrun stapler", {
+      cause,
+    });
+  }
+}
+
 await preflightMacosBundleFixture();
 const root = await mkdtemp(join(tmpdir(), "rea-code-signature-"));
 
@@ -59,6 +73,40 @@ const ENTITLEMENTS = `<?xml version="1.0" encoding="UTF-8"?>
 
 try {
   const { app } = await buildMacosBundleFixture(root);
+  let realTicket = {
+    status: "unverified",
+    reason:
+      "No known stapled app supplied; use --stapled-app PATH to exercise producer output.",
+  };
+  if (stapledApp !== undefined) {
+    const appPath = await realpath(stapledApp);
+    const oracle = await exec("/usr/bin/xcrun", [
+      "stapler",
+      "validate",
+      appPath,
+    ]);
+    const observed = await artifactCli("inspect-signature", appPath);
+    assert.equal(
+      observed.stapled_ticket.status,
+      "present",
+      JSON.stringify(observed.stapled_ticket),
+    );
+    assert.equal(observed.stapled_ticket.reason, null);
+    assert.match(observed.stapled_ticket.sha256, /^[a-f0-9]{64}$/u);
+    await withArtifactMcp(appPath, async (client) => {
+      const viaMcp = await artifactMcpResult(client, "inspect_signature");
+      assert.deepEqual(viaMcp.stapled_ticket, observed.stapled_ticket);
+    });
+    realTicket = {
+      status: "verified",
+      selected_app: stapledApp,
+      ticket_sha256: observed.stapled_ticket.sha256,
+      size: observed.stapled_ticket.size,
+      oracle: "xcrun stapler validate",
+      stdout: oracle.stdout,
+      stderr: oracle.stderr,
+    };
+  }
   const plain = await artifactCli("inspect-signature", app);
   assert.deepEqual(plain.code_directory.flags.names, ["adhoc"]);
   assert.equal(plain.verification.status, "valid");
@@ -185,6 +233,7 @@ try {
       platform_identifier: platform.code_directory.platform_identifier,
       tampered_verification: tampered.verification.status,
       nested_tamper_verification: nestedTamper.verification.status,
+      real_stapled_ticket: realTicket,
     })}\n`,
   );
 } finally {
