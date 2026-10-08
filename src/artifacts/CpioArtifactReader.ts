@@ -494,7 +494,10 @@ export class CpioArtifactReader implements ArtifactReader {
         kind: "symlink",
         key,
         header,
-        limitations: [crcMismatchDetail(consumed.mismatch)],
+        limitations: [
+          crcMismatchDetail(consumed.mismatch),
+          symlinkTargetLimitation(header, consumed.bytes),
+        ],
         contentUnavailable: true,
       });
       return;
@@ -534,10 +537,9 @@ export class CpioArtifactReader implements ArtifactReader {
     for (const links of this.#pending.values())
       for (const { path, key, header } of links) {
         // A complete zero-length group establishes empty content. An orphan
-        // that claims more links than appear is missing its bytes.
-        const complete =
-          links.length >= header.links &&
-          links.every((m) => m.header.fileSize === 0);
+        // that claims more links than appear is missing its bytes. Pending
+        // groups contain only zero-length members; do not rescan per alias.
+        const complete = links.length >= header.links;
         if (header.fileSize === 0 && complete) {
           const empty = Buffer.alloc(0);
           this.#aliases.set(key, empty);

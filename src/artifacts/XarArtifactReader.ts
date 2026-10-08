@@ -12,7 +12,7 @@ import {
 } from "./ArtifactDecodedBudget.js";
 import { artifactStreamPipeline } from "./ArtifactStreamPipeline.js";
 import {
-  assertXarTocElements,
+  assertXarTocNodes,
   xarInteger as integer,
   xarHeapPosition,
   XarPathBudget,
@@ -86,8 +86,29 @@ const childElements = (element: Element, name: string): Element[] =>
     (child): child is Element => isElement(child) && child.tagName === name,
   );
 
-const childElement = (element: Element, name: string): Element | undefined =>
-  childElements(element, name)[0];
+const childElement = (element: Element, name: string): Element | undefined => {
+  const children = childElements(element, name);
+  if (children.length > 1)
+    throw new ArtifactReaderFailure(
+      "format",
+      `xar TOC has duplicate <${name}> declarations in <${element.tagName}>`,
+    );
+  return children[0];
+};
+
+// productbuild repeats an identical <name> when flattening a component PKG.
+// Preserve that observed producer form while rejecting contradictory names.
+const memberName = (file: Element): string | undefined => {
+  const names = childElements(file, "name").map(
+    (name) => name.textContent ?? "",
+  );
+  if (names.some((name) => name !== names[0]))
+    throw new ArtifactReaderFailure(
+      "format",
+      "xar TOC has conflicting <name> declarations",
+    );
+  return names[0];
+};
 
 const textOf = (element: Element, name: string): string | undefined =>
   childElement(element, name)?.textContent ?? undefined;
@@ -218,7 +239,7 @@ const collectMembers = (
   while (pending.length > 0) {
     const next = pending.pop();
     if (next === undefined) break;
-    const name = textOf(next.element, "name");
+    const name = memberName(next.element);
     if (
       name === undefined ||
       name === "" ||
@@ -447,6 +468,12 @@ export class XarArtifactReader implements ArtifactReader {
     const { bytesRead } = await handle.read(header, 0, 28, 0);
     if (bytesRead < 28 || header.readUInt32BE(0) !== XAR_MAGIC)
       throw new ArtifactReaderFailure("format", "File is not a xar archive");
+    const version = header.readUInt16BE(6);
+    if (version !== 1)
+      throw new ArtifactReaderFailure(
+        "format",
+        `Unsupported xar header version ${version}; expected 1`,
+      );
     const headerSize = header.readUInt16BE(4);
     const tocCompressed = header.readBigUInt64BE(8);
     const tocSize = header.readBigUInt64BE(16);
@@ -487,7 +514,7 @@ export class XarArtifactReader implements ArtifactReader {
           { cause },
         );
       }
-      assertXarTocElements(xml);
+      assertXarTocNodes(xml);
     } catch (cause: unknown) {
       if (cause instanceof ArtifactReaderFailure) throw cause;
       throw new ArtifactReaderFailure("format", "xar TOC is not zlib data", {

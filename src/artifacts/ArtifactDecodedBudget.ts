@@ -1,6 +1,13 @@
 import { Transform, type TransformCallback } from "node:stream";
 import { ArtifactReaderFailure } from "./ArtifactReader.js";
 
+/** Terminal exhaustion of the budget shared by all readers in one traversal. */
+export class ArtifactBudgetExceeded extends ArtifactReaderFailure {
+  constructor(message: string) {
+    super("limit", message);
+  }
+}
+
 /** One decoded-byte ceiling shared by an archive and all nested readers. */
 export class ArtifactDecodedBudget {
   #used = 0;
@@ -18,8 +25,7 @@ export class ArtifactDecodedBudget {
       bytes < 0 ||
       bytes > this.maximum - this.#used
     )
-      throw new ArtifactReaderFailure(
-        "limit",
+      throw new ArtifactBudgetExceeded(
         `Decoded archive budget of ${this.maximum} bytes exhausted at ${path}`,
       );
     this.#used += bytes;
@@ -30,8 +36,7 @@ export class ArtifactDecodedBudget {
     const segments = path.split("/").length;
     const units = 1024 + Buffer.byteLength(path) * 2 + segments * 256;
     if (units > this.maximumMetadata - this.#metadataUsed)
-      throw new ArtifactReaderFailure(
-        "limit",
+      throw new ArtifactBudgetExceeded(
         `Retained archive metadata budget of ${this.maximumMetadata} capacity units exhausted at ${path}`,
       );
     this.#metadataUsed += units;

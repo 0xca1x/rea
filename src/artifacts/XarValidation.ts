@@ -1,26 +1,35 @@
 import { ArtifactReaderFailure } from "./ArtifactReader.js";
 
 /**
- * Element ceiling for one TOC. The byte cap still allows millions of tiny
- * elements, and the DOM is built before member collection can charge the
- * metadata budget.
+ * Node ceiling for one TOC. The byte cap still allows millions of tiny
+ * elements, comments, and processing instructions. The DOM is built before
+ * member collection can charge the metadata budget.
  */
-const MAX_TOC_ELEMENTS = 100_000;
+const MAX_TOC_NODES = 100_000;
 
-/** Reject a TOC whose element count would materialize an unbounded DOM. */
-export const assertXarTocElements = (xml: string): void => {
-  let elements = 0;
-  for (let index = 0; index < xml.length; index += 1) {
-    if (xml[index] !== "<") continue;
-    const next = xml[index + 1];
-    if (next === undefined || next === "/" || next === "?" || next === "!")
-      continue;
-    elements += 1;
-    if (elements > MAX_TOC_ELEMENTS)
-      throw new ArtifactReaderFailure(
-        "limit",
-        `xar TOC exceeds ${MAX_TOC_ELEMENTS} XML elements`,
-      );
+/** Bound DOM-producing markup, including comments, CDATA and processing instructions. */
+export const assertXarTocNodes = (xml: string): void => {
+  let nodes = 0;
+  let index = xml.indexOf("<");
+  while (index !== -1) {
+    if (xml[index + 1] !== "/") {
+      nodes += 1;
+      if (nodes > MAX_TOC_NODES)
+        throw new ArtifactReaderFailure(
+          "limit",
+          `xar TOC exceeds ${MAX_TOC_NODES} XML nodes`,
+        );
+    }
+    const terminator = xml.startsWith("<!--", index)
+      ? "-->"
+      : xml.startsWith("<![CDATA[", index)
+        ? "]]>"
+        : xml.startsWith("<?", index)
+          ? "?>"
+          : ">";
+    const end = xml.indexOf(terminator, index + 1);
+    if (end === -1) return; // The XML parser reports malformed framing.
+    index = xml.indexOf("<", end + terminator.length);
   }
 };
 

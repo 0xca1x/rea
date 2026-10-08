@@ -1,3 +1,4 @@
+import { ArtifactBudgetExceeded } from "../ArtifactDecodedBudget.js";
 import { ArtifactPathRegistry } from "../ArtifactPaths.js";
 import { visitArtifactTree } from "../ArtifactTraversal.js";
 import {
@@ -108,6 +109,7 @@ const visitArtifactEntries = async (
           // unavailable with its diagnostic, without inventing a node.
           if (
             context.integrity.mode !== "record-and-continue" ||
+            cause instanceof ArtifactBudgetExceeded ||
             !(cause instanceof ArtifactReaderFailure) ||
             (cause.reason !== "integrity" &&
               cause.reason !== "limit" &&

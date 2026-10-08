@@ -1,25 +1,18 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { Readable } from "node:stream";
 import { buffer } from "node:stream/consumers";
 
-import { afterEach, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 
 import type { ArtifactEntry } from "./ArtifactReader.js";
 import { CpioArtifactReader } from "./CpioArtifactReader.js";
 import { MODE, gzipCpio, xarArchive } from "./InstallerPackage.fixture.js";
+import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
 import { XarArtifactReader } from "./XarArtifactReader.js";
 
-let directory: string | undefined;
-afterEach(async () => {
-  if (directory !== undefined)
-    await rm(directory, { recursive: true, force: true });
-  directory = undefined;
-});
-
 const writePackage = async (bytes: Uint8Array): Promise<string> => {
-  directory = await mkdtemp(join(tmpdir(), "rea-pkg-reader-"));
+  const directory = await createTestTempDirectory("rea-pkg-reader-");
   const path = join(directory, "fixture.pkg");
   await writeFile(path, bytes);
   return path;

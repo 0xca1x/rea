@@ -1,10 +1,10 @@
-import { mkdtemp, rm, writeFile } from "node:fs/promises";
-import { tmpdir } from "node:os";
+import { writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { buffer } from "node:stream/consumers";
 import { Readable } from "node:stream";
 import { gunzipSync, gzipSync } from "node:zlib";
 import { expect, it } from "vitest";
+import { createTestTempDirectory } from "../../tests/fixtures/temporaryDirectory.js";
 import { ArtifactDecodedBudget } from "./ArtifactDecodedBudget.js";
 import { CpioArtifactReader } from "./CpioArtifactReader.js";
 import {
@@ -15,6 +15,7 @@ import {
   type XarFixtureMember,
 } from "./InstallerPackage.fixture.js";
 import { XarArtifactReader } from "./XarArtifactReader.js";
+import { scanReader } from "./inventory/scanReader.js";
 import { visitArtifactTree } from "./ArtifactTraversal.js";
 
 const withReader = async (
@@ -22,7 +23,7 @@ const withReader = async (
   run: (reader: XarArtifactReader) => Promise<void>,
   decodedBudget?: ArtifactDecodedBudget,
 ) => {
-  const root = await mkdtemp(join(tmpdir(), "rea-pkg-limits-"));
+  const root = await createTestTempDirectory("rea-pkg-limits-");
   const path = join(root, "fixture.pkg");
   await writeFile(path, bytes);
   const reader = new XarArtifactReader(
@@ -33,7 +34,6 @@ const withReader = async (
     await run(reader);
   } finally {
     await reader.close();
-    await rm(root, { recursive: true, force: true });
   }
 };
 
@@ -295,7 +295,7 @@ it("rejects a TOC whose element count would build an unbounded DOM", async () =>
       })(),
     ).rejects.toMatchObject({
       reason: "limit",
-      message: "xar TOC exceeds 100000 XML elements",
+      message: "xar TOC exceeds 100000 XML nodes",
     });
   });
 });
@@ -468,4 +468,137 @@ it("charges long enclosing prefixes for every retained nested entry", async () =
     },
     new ArtifactDecodedBudget(1024 * 1024, 512 * 1024),
   );
+});
+
+it.each(["<!--n-->", "<?n value?>", "<![CDATA[n]]>"])(
+  "bounds DOM nodes produced by %s before parsing",
+  async (node) => {
+    const bytes = rewriteXarToc(xarArchive([]), (xml) =>
+      xml.replace("<toc>", `<toc>${node.repeat(100_001)}`),
+    );
+    await withReader(bytes, async (reader) => {
+      await expect(scanReader(reader)).rejects.toMatchObject({
+        reason: "limit",
+        message: expect.stringContaining("XML nodes"),
+      });
+    });
+  },
+);
+
+it.each(["data", "extracted-checksum", "offset", "encoding", "type"])(
+  "rejects duplicate singleton <%s> declarations",
+  async (tag) => {
+    const bytes = rewriteXarToc(
+      xarArchive([{ name: "a", data: Buffer.from("ok") }]),
+      (xml) => {
+        const pattern = new RegExp(
+          `<${tag}(?:\\s[^>]*|)>(?:[^]*?)</${tag}>|<${tag}[^>]*/>`,
+        );
+        return xml.replace(pattern, (element) => element + element);
+      },
+    );
+    await withReader(bytes, async (reader) => {
+      await expect(scanReader(reader)).rejects.toMatchObject({
+        reason: "format",
+        message: expect.stringContaining(`duplicate <${tag}>`),
+      });
+    });
+  },
+);
+
+it("rejects unsupported xar versions before reading the TOC", async () => {
+  const bytes = Buffer.from(xarArchive([]));
+  bytes.writeUInt16BE(2, 6);
+  await withReader(bytes, async (reader) => {
+    await expect(scanReader(reader)).rejects.toMatchObject({
+      reason: "format",
+      message: expect.stringContaining("version 2"),
+    });
+  });
+});
+
+it("ends record-and-continue traversal when its shared decoded budget is exhausted", async () => {
+  const bytes = xarArchive(
+    Array.from({ length: 10 }, (_, index) => ({
+      name: `file-${index}`,
+      data: Buffer.alloc(40, index),
+    })),
+  );
+  await withReader(
+    bytes,
+    async (reader) => {
+      const opened: string[] = [];
+      const observed = {
+        format: reader.format,
+        provenance: reader.provenance.bind(reader),
+        entries: reader.entries.bind(reader),
+        close: reader.close.bind(reader),
+        decodedBudget: reader.decodedBudget,
+        open: async (...args: Parameters<typeof reader.open>) => {
+          opened.push(args[0].path);
+          return reader.open(...args);
+        },
+      };
+      await expect(
+        scanReader(observed, undefined, { mode: "record-and-continue" }),
+      ).rejects.toMatchObject({
+        reason: "limit",
+        message: expect.stringContaining("Decoded archive budget"),
+      });
+      expect(opened).toEqual(["file-0", "file-1"]);
+    },
+    new ArtifactDecodedBudget(64),
+  );
+});
+
+it("accepts productbuild repeated identical names but rejects contradictory names", async () => {
+  const original = xarArchive([{ name: "a", data: Buffer.from("ok") }]);
+  for (const name of ["a", "different"]) {
+    const bytes = rewriteXarToc(original, (xml) =>
+      xml.replace("<name>a</name>", `<name>a</name><name>${name}</name>`),
+    );
+    await withReader(bytes, async (reader) => {
+      if (name === "a")
+        expect((await scanReader(reader)).occurrences).toHaveLength(1);
+      else
+        await expect(scanReader(reader)).rejects.toMatchObject({
+          reason: "format",
+          message: expect.stringContaining("conflicting <name>"),
+        });
+    });
+  }
+});
+
+it("counts a comment as one node even when its text contains markup openers", async () => {
+  const bytes = rewriteXarToc(xarArchive([]), (xml) =>
+    xml.replace("<toc>", `<toc><!--${"<".repeat(100_001)}-->`),
+  );
+  await withReader(bytes, async (reader) => {
+    expect((await scanReader(reader)).occurrences).toHaveLength(0);
+  });
+});
+it("resolves a large complete empty hard-link group without per-alias rescans", async () => {
+  const count = 20_000;
+  const bytes = gzipCpio(
+    Array.from({ length: count }, (_, index) => ({
+      name: `link-${index}`,
+      mode: MODE.file,
+      data: "",
+      ino: 1,
+      links: count,
+    })),
+    "newc",
+  );
+  const reader = new CpioArtifactReader(async () => Readable.from([bytes]));
+  try {
+    let retained = 0;
+    for await (const entry of reader.entries()) {
+      expect(entry.declaredSize).toBe(0);
+      expect(entry.contentUnavailable).not.toBe(true);
+      retained++;
+    }
+    expect(retained).toBe(count);
+  } finally {
+    await reader.close();
+  }
 });
