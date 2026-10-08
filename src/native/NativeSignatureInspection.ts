@@ -10,7 +10,7 @@ import {
 import { deriveSecurityFacets } from "./CodeSigningPolicy.js";
 import {
   bindSignatureTarget,
-  signatureTargetIssue,
+  verifySignatureTarget,
 } from "./SignatureTargetBinding.js";
 import { omittedPrototypeKeysLimitation } from "../domain/propertyListKeys.js";
 import { err, ok, type Result } from "../domain/result.js";
@@ -107,6 +107,7 @@ export const inspectNativeSignature = async (options: {
 }): Promise<Result<NativeObservation, AnalysisError>> => {
   const { target, capture, signal } = options;
   const binding = await bindSignatureTarget(target, signal);
+  if (!binding.ok) return binding;
   const displays = await signatureDisplays(target.path, capture, signal);
   if (!displays.ok) return displays;
   const { display, requirements, entitlements } = displays.value;
@@ -201,7 +202,8 @@ export const inspectNativeSignature = async (options: {
   }
   const provenance = captures.map(options.invocation);
   const ticket = await stapledTicket(target, signal);
-  const versionIssue = await signatureTargetIssue(target, binding, signal);
+  const version = await verifySignatureTarget(target, binding.value, signal);
+  if (!version.ok) return version;
   const facets = deriveSecurityFacets({
     signed: !aggregateUnsigned,
     codeDirectory: parsed.code_directory,
@@ -211,11 +213,6 @@ export const inspectNativeSignature = async (options: {
     appleOrigin,
     signatureInvalid: mainInvalid,
   });
-  if (versionIssue !== null)
-    limitations.push(
-      versionIssue,
-      "Security facets are unknown because command observations could not be bound to one registered target version.",
-    );
   const result = inspectSignatureSchema.parse({
     ...parsed,
     signed: !aggregateUnsigned,
@@ -224,15 +221,7 @@ export const inspectNativeSignature = async (options: {
     entitlements: entitlementValue.value,
     verification,
     stapled_ticket: ticket,
-    security_facets:
-      versionIssue === null
-        ? facets
-        : facets.map((facet) => ({
-            ...facet,
-            state: "unknown" as const,
-            evidence: [...facet.evidence, "target version not bound"],
-            explanation: `${facet.explanation} Target version binding failed: ${versionIssue}`,
-          })),
+    security_facets: facets,
     provenance,
     limitations,
   });

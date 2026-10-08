@@ -40,7 +40,7 @@ it("checks prepared-only fragments with the same completeness rules", async () =
   );
 });
 
-it.each(["EIO", "ESTALE"])(
+it.each(["EACCES", "EPERM", "EIO", "ESTALE"])(
   "keeps observed records when path lookup fails with %s",
   async (code) => {
     const result = await inspectNestedCodePaths(
@@ -60,7 +60,7 @@ it.each(["EIO", "ESTALE"])(
     expect(result.limitations.every((message) => message.includes(code))).toBe(
       true,
     );
-    expect(result.progressAmbiguous).toBe(false);
+    expect(result.progressAmbiguous).toBe(true);
   },
 );
 it("detects newline ambiguity even when the reported first fragment does not exist", async () => {

@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
 import {
   copyFile,
+  lstat,
   mkdir,
   mkdtemp,
   realpath,
@@ -123,22 +124,30 @@ try {
   });
   // Deep verification reports the fixture's real nested code, all on disk.
   assert.ok(plain.verification.validated_nested_code.length > 0);
-  assert.ok(
-    !plain.limitations.some((limitation) =>
-      limitation.includes("which does not exist"),
-    ),
-  );
+  const checkNestedProgress = async (signature) => {
+    for (const path of signature.verification.validated_nested_code) {
+      try {
+        await lstat(path);
+      } catch {
+        assert.ok(
+          signature.limitations.some((limitation) =>
+            limitation.includes(JSON.stringify(path)),
+          ),
+          `Unconfirmed progress pathname must retain its limitation: ${path}`,
+        );
+      }
+    }
+  };
+  await checkNestedProgress(plain);
   await withArtifactMcp(app, async (client) => {
     const viaMcp = await artifactMcpResult(client, "inspect_signature");
-    const semantic = (value) => ({
-      ...value,
-      provenance: [],
-      verification: {
-        ...value.verification,
-        raw_stdout: "",
-        raw_stderr: "",
-      },
-    });
+    assert.equal(viaMcp.verification.status, plain.verification.status);
+    assert.equal(viaMcp.verification.path, plain.verification.path);
+    await checkNestedProgress(viaMcp);
+    // Separate live codesign runs can interleave progress records differently.
+    // Compare the artifact's signature posture; check each capture independently.
+    const semantic = ({ provenance, verification, limitations, ...posture }) =>
+      posture;
     assert.deepEqual(semantic(viaMcp), semantic(plain));
   });
 

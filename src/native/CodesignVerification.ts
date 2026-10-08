@@ -58,6 +58,7 @@ const INVALID_SIGNATURE_REASONS = [
   "file modified:",
   "invalid or unsupported format",
   "invalid signature",
+  "main executable failed strict validation",
   "resource envelope is obsolete",
   "resource fork, Finder information, or similar detritus not allowed",
   "signature is invalid",

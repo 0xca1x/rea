@@ -106,6 +106,8 @@ describe("native signature posture", () => {
 
   it("keeps a failed strict verification as an observation", async () => {
     const { app, executable } = await fixtureApp(undefined);
+    await mkdir(join(app, "Contents/PlugIns/A.appex"), { recursive: true });
+    await mkdir(join(app, "Contents/XPCServices/B.xpc"), { recursive: true });
     const signature = await new NativeMacOSProvider(
       new TamperedRunner(),
       "darwin",
@@ -506,6 +508,52 @@ describe("signature architecture coverage", () => {
 });
 
 describe("signature target version binding", () => {
+  it("rejects a replacement before invoking signature tools", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const runner = new (class extends FixtureRunner {
+      calls = 0;
+      override async run(tool: string, args: readonly string[]) {
+        this.calls += 1;
+        return super.run(tool, args);
+      }
+    })();
+    const client = new NativeMacOSProvider(runner, "darwin").createClient(
+      machoTarget(executable, app),
+    );
+    await writeFile(executable, "replacement bytes");
+    const signature = await client.execute("inspect_signature", {});
+    expect(signature.ok).toBe(false);
+    if (signature.ok) throw new Error("Expected target change");
+    expect(projectAnalysisError(signature.error)).toMatchObject({
+      code: "artifact_changed",
+      details: { path: executable },
+    });
+    expect(runner.calls).toBe(0);
+  });
+
+  it.skipIf(process.getuid?.() === 0)(
+    "rejects an unreadable selected executable",
+    async () => {
+      const { app, executable } = await fixtureApp(undefined);
+      const client = new NativeMacOSProvider(
+        new FixtureRunner(),
+        "darwin",
+      ).createClient(machoTarget(executable, app));
+      await chmod(executable, 0);
+      try {
+        const signature = await client.execute("inspect_signature", {});
+        expect(signature.ok).toBe(false);
+        if (signature.ok) throw new Error("Expected access denial");
+        expect(projectAnalysisError(signature.error)).toMatchObject({
+          code: "access_denied",
+          details: { path: executable },
+        });
+      } finally {
+        await chmod(executable, 0o600);
+      }
+    },
+  );
+
   it("reports a regular ticket replaced by a directory as changed", async () => {
     const { app } = await fixtureApp(notarizationTicketFixture());
     const ticket = await stapledTicket(
@@ -548,7 +596,7 @@ describe("signature target version binding", () => {
       });
     },
   );
-  it("downgrades facets when the executable changes between captures", async () => {
+  it("rejects observations when the executable changes between captures", async () => {
     const { app, executable } = await fixtureApp(undefined);
     const signature = await new NativeMacOSProvider(
       new ReplacingExecutableRunner(),
@@ -556,18 +604,12 @@ describe("signature target version binding", () => {
     )
       .createClient(machoTarget(executable, app))
       .execute("inspect_signature", {});
-    if (!signature.ok) throw signature.error;
-    const result = inspectSignatureSchema.parse(signature.value.result);
-    expect(result.verification?.status).toBe("valid");
-    expect(
-      result.security_facets.every(({ state }) => state === "unknown"),
-    ).toBe(true);
-    expect(result.limitations).toContain(
-      `Signature target changed during inspection: ${executable}`,
-    );
-    expect(result.security_facets[0]?.evidence).toContain(
-      "target version not bound",
-    );
+    expect(signature.ok).toBe(false);
+    if (signature.ok) throw new Error("Expected target change");
+    expect(projectAnalysisError(signature.error)).toMatchObject({
+      code: "artifact_changed",
+      details: { path: executable },
+    });
   });
 
   it.skipIf(process.getuid?.() === 0)(
@@ -579,13 +621,29 @@ describe("signature target version binding", () => {
       await chmod(helpers, 0);
       try {
         const signature = await new NativeMacOSProvider(
-          new NewlinePathRunner(),
+          new (class extends FixtureRunner {
+            override async run(tool: string, args: readonly string[]) {
+              const result = await super.run(tool, args);
+              if (!result.ok || args[0] !== "--verify") return result;
+              const stderr = `--prepared:${helpers}/odd\n${app}: invalid signature\n${app}: permission denied\n`;
+              return ok({
+                ...result.value,
+                exitCode: 1,
+                stderr,
+                stderrBytes: Buffer.byteLength(stderr),
+              });
+            }
+          })(),
           "darwin",
         )
           .createClient(machoTarget(executable, app))
           .execute("inspect_signature", {});
         if (!signature.ok) throw signature.error;
         const result = inspectSignatureSchema.parse(signature.value.result);
+        expect(result.verification?.status).toBe("unknown");
+        expect(result.verification?.raw_stderr).toContain(
+          `${app}: invalid signature`,
+        );
         expect(result.limitations).toContainEqual(
           expect.stringContaining("Could not confirm completeness"),
         );

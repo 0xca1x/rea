@@ -49,6 +49,7 @@ export const inspectNestedCodePaths = async (
       signal?.throwIfAborted();
       const code = errorCode(cause);
       if (code === "EACCES" || code === "EPERM") {
+        progressAmbiguous = true;
         limitations.push(
           `Could not confirm completeness of codesign nested path ${JSON.stringify(path)}: permission denied (${code}); the reported path may be a fragment.`,
         );
@@ -58,10 +59,12 @@ export const inspectNestedCodePaths = async (
         limitations.push(
           `codesign reported ${record} nested code at ${JSON.stringify(path)}, which does not exist; structured nested-code records may hold fragments of a path containing a newline.`,
         );
-      else
+      else {
+        progressAmbiguous = true;
         limitations.push(
           `Could not confirm completeness of codesign nested path ${JSON.stringify(path)}: ${cause instanceof Error ? cause.message : String(cause)} (${String(code ?? "unknown")}); the reported path may be a fragment.`,
         );
+      }
     }
     signal?.throwIfAborted();
     const parent = dirname(path);
@@ -91,6 +94,7 @@ export const inspectNestedCodePaths = async (
       }
     } catch (cause: unknown) {
       signal?.throwIfAborted();
+      progressAmbiguous = true;
       limitations.push(
         `Could not confirm completeness of codesign nested path ${JSON.stringify(path)} from parent directory ${JSON.stringify(parent)}: ${cause instanceof Error ? cause.message : String(cause)}`,
       );

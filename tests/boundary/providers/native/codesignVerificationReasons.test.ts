@@ -43,6 +43,7 @@ it("keeps operational, unsigned, definite invalid and unrecognized failures dist
   expect(status("permission denied")).toBe("unknown");
   expect(status("I/O error")).toBe("unknown");
   expect(status("invalid signature")).toBe("invalid");
+  expect(status("main executable failed strict validation")).toBe("invalid");
   expect(status("bundle format unrecognized, invalid, or unsuitable")).toBe(
     "invalid",
   );
