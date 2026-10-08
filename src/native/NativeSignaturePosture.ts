@@ -4,7 +4,6 @@ import { lstat, open, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
 
 import type { InspectSignature } from "../domain/native/nativeInspection.js";
-import type { NativeCommandCapture } from "./CommandRunner.js";
 import { ticketStructureIssue } from "./NotarizationTicket.js";
 
 /** Notarization tickets are a few kilobytes; larger files are hashed in chunks. */
@@ -47,62 +46,6 @@ const bundleDirFromPlist = (plist: string): string | undefined => {
   if (plist.endsWith(flatSuffix))
     return plist.slice(0, -"/Info.plist".length) || undefined;
   return undefined;
-};
-
-/**
- * Project a local `codesign --verify --strict` capture without reinterpreting
- * its messages. codesign validates nested code concurrently, so its
- * `--prepared:`/`--validated:` progress lines arrive in no fixed order; they
- * are reported as a sorted list of validated nested code instead.
- */
-/** Diagnostics showing verification could not read its target. */
-export const verificationIOFailure = (
-  diagnostics: readonly string[],
-): boolean =>
-  diagnostics.some((line) =>
-    /permission denied|operation not permitted|\bEACCES\b|\bEPERM\b|I\/O error|input\/output error/iu.test(
-      line,
-    ),
-  );
-
-export const signatureVerification = (
-  capture: NativeCommandCapture,
-  path: string,
-  unsigned: boolean,
-): NonNullable<InspectSignature["verification"]> => {
-  // Preserve trailing whitespace and carriage returns: a nested path may end
-  // in a space, tab, or CR. codesign delimits records with LF, so split on LF
-  // only and strip leading whitespace for record parsing.
-  const lines = `${capture.stderr}\n${capture.stdout}`
-    .split(/\n/u)
-    .filter((line) => line.length > 0);
-  const record = (line: string): string => line.replace(/^\s+/u, "");
-  const diagnostics = lines.filter(
-    (line) => !/^--(?:prepared|validated):/u.test(record(line)),
-  );
-  return {
-    path,
-    status:
-      capture.exitCode === 0
-        ? "valid"
-        : unsigned
-          ? "unsigned"
-          : verificationIOFailure(diagnostics)
-            ? "unknown"
-            : "invalid",
-    exit_code: capture.exitCode,
-    diagnostics,
-    validated_nested_code: [
-      ...new Set(
-        lines.flatMap((line) => {
-          const trimmed = record(line);
-          return trimmed.startsWith("--validated:")
-            ? [trimmed.slice("--validated:".length)]
-            : [];
-        }),
-      ),
-    ].sort((left, right) => (left < right ? -1 : left > right ? 1 : 0)),
-  };
 };
 
 /**

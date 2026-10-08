@@ -8,7 +8,7 @@ import { observeNativeUi } from "./NativeUiObservation.js";
 import { LldbCallTracer, type NativeCallTracer } from "./LldbCallTracer.js";
 import { observeNativeCalls } from "./NativeCallObservation.js";
 import { dirname, isAbsolute, resolve } from "node:path";
-import { open, realpath, stat } from "node:fs/promises";
+import { open, stat } from "node:fs/promises";
 
 import { z } from "zod";
 
@@ -25,8 +25,6 @@ import {
   type NativeToolName,
 } from "../contracts/native/nativeToolContracts.js";
 import type { BinaryTarget } from "../domain/binaryTarget.js";
-import { canonicalJson } from "../domain/comparisonSemantics.js";
-import type { EvidenceLocation } from "../domain/evidence.js";
 import {
   AnalysisCancelledError,
   AnalysisCapabilityUnavailableError,
@@ -38,13 +36,8 @@ import { ProviderAdapterError } from "../domain/providerAdapterError.js";
 import { AnalysisError } from "../domain/analysisErrorBase.js";
 import { jsonValueSchema, type JsonValue } from "../domain/jsonValue.js";
 import {
-  omittedPrototypeKeysLimitation,
-  parseXmlPropertyList,
-} from "../domain/propertyListKeys.js";
-import {
   demangleSwiftSchema,
   inspectPlistSchema,
-  inspectSignatureSchema,
   listArchitecturesSchema,
   type NativeCommandInvocation,
 } from "../domain/native/nativeInspection.js";
@@ -55,19 +48,8 @@ import {
   type NativeCommandCapture,
   type NativeCommandRunner,
 } from "./CommandRunner.js";
-import { parseCodeSignature } from "./parsers/codesign.js";
-import {
-  SIGNATURE_POSTURE_LIMITATIONS,
-  signatureVerification,
-  signedCodePath,
-  stapledTicket,
-  unconfirmedNestedCode,
-} from "./NativeSignaturePosture.js";
-import { deriveSecurityFacets } from "../domain/native/codeSigningPosture.js";
-import {
-  signatureArchitectures,
-  summarizeSignatureSlices,
-} from "./NativeSignatureSlices.js";
+import { inspectNativeSignature } from "./NativeSignatureInspection.js";
+import type { NativeObservation } from "./NativeObservation.js";
 import { parseDemangledSymbols } from "./parsers/demangle.js";
 import { parseLipoArchitectures } from "./parsers/lipo.js";
 import {
@@ -335,341 +317,15 @@ class NativeMacOSClient implements AnalysisClient {
   async #inspectSignature(
     signal?: AbortSignal,
   ): Promise<Result<NativeObservation, AnalysisError>> {
-    const display = await this.#run(
-      "inspect_signature",
-      "codesign",
-      ["-d", "--verbose=4", this.target.path],
-      { signal, acceptNonZero: true },
-    );
-    if (!display.ok) return display;
-    const unsigned = isNonzeroUnsignedObservation(display.value);
-    const displayFailure = codeSignCaptureFailure(display.value);
-    if (displayFailure !== null) return err(displayFailure);
-    const requirements = await this.#run(
-      "inspect_signature",
-      "codesign",
-      ["-d", "-r-", this.target.path],
-      { signal, acceptNonZero: true },
-    );
-    if (!requirements.ok) return requirements;
-    const requirementsFailure = codeSignCaptureFailure(requirements.value);
-    if (requirementsFailure !== null) return err(requirementsFailure);
-    const entitlements = await this.#run(
-      "inspect_signature",
-      "codesign",
-      ["-d", "--entitlements", ":-", this.target.path],
-      { signal, acceptNonZero: true },
-    );
-    if (!entitlements.ok) return entitlements;
-    const entitlementsFailure = codeSignCaptureFailure(entitlements.value);
-    if (entitlementsFailure !== null) return err(entitlementsFailure);
-    // codesign echoes the resolved executable path in its diagnostics.
-    const parsed = parseCodeSignature(display.value.stderr, unsigned, [
-      this.target.path,
-      ...(await canonicalPath(this.target.path)),
-    ]);
-    // The requirement is printed to stdout; stderr echoes the path.
-    const requirementText =
-      /designated\s*=>\s*(.+)$/mu.exec(requirements.value.stdout)?.[1] ?? null;
-    // Entitlements XML is printed to stdout; stderr echoes the path.
-    const entitlementValue = parseEntitlements(entitlements.value.stdout);
-    const verifyPath = signedCodePath(this.target);
-    const verify = await this.#verifySignature(verifyPath, signal);
-    if (!verify.ok) return verify;
-    const captures = [
-      display.value,
-      requirements.value,
-      entitlements.value,
-      verify.value,
-    ];
-    // A platform identifier means a platform binary only in Apple's own
-    // signatures, which satisfy `anchor apple`; Developer ID code does not.
-    let appleOrigin = false;
-    if (
-      !unsigned &&
-      (parsed.code_directory?.platform_identifier ?? null) !== null
-    ) {
-      const anchor = await this.#run(
-        "inspect_signature",
-        "codesign",
-        ["--verify", "-R=anchor apple", verifyPath],
-        { signal, acceptNonZero: true },
-      );
-      if (!anchor.ok) return anchor;
-      captures.push(anchor.value);
-      appleOrigin = anchor.value.exitCode === 0;
-    }
-    const limitations = [
-      ...parsed.limitations,
-      ...SIGNATURE_POSTURE_LIMITATIONS,
-      ...(entitlementValue.omittedPrototypeKeys === 0
-        ? []
-        : [
-            `Entitlements: ${omittedPrototypeKeysLimitation(entitlementValue.omittedPrototypeKeys)}`,
-          ]),
-    ];
-    const sliceState = await this.#sliceSigningState(
-      parsed.format,
-      requirements.value,
-      entitlements.value,
-      unsigned,
-      signal,
-    );
-    if (!sliceState.ok) return sliceState;
-    const mixedSigning = sliceState.value.mixed;
-    const aggregateUnsigned =
-      sliceState.value.signed === undefined
-        ? unsigned
-        : !sliceState.value.signed;
-    captures.push(...sliceState.value.captures);
-    limitations.push(...sliceState.value.limitations);
-    // Only the top-level signature decides "unsigned"; unsigned nested
-    // code inside a signed bundle makes the bundle invalid.
-    const verification = signatureVerification(
-      verify.value,
-      verifyPath,
-      aggregateUnsigned,
-    );
-    if (
-      sliceState.value.classificationUnknown &&
-      verification.status !== "valid"
-    )
-      verification.status = "unknown";
-    limitations.push(...(await unconfirmedNestedCode(verification)));
-    if (verification.status === "unknown")
-      limitations.push(
-        "Signature verification could not read its target (permission or I/O diagnostic); the unknown status reflects an operational failure, not a proven broken signature.",
-      );
-    // Deep verification covers nested code: when it fails only there, the
-    // main executable's own signature may still be valid. Check it directly
-    // before hiding its facets as unauthenticated.
-    let mainInvalid =
-      verification.status === "invalid" || verification.status === "unknown";
-    if (mainInvalid && !unsigned && verifyPath !== this.target.path) {
-      const mainVerify = await this.#verifySignature(this.target.path, signal);
-      if (!mainVerify.ok) return mainVerify;
-      captures.push(mainVerify.value);
-      mainInvalid = mainVerify.value.exitCode !== 0;
-    }
-    const provenance = captures.map((capture) =>
-      invocation(capture, this.target.path),
-    );
-    const result = inspectSignatureSchema.parse({
-      ...parsed,
-      signed: !aggregateUnsigned,
-      designated_requirement: requirementText,
-      entitlements: entitlementValue.value,
-      verification,
-      stapled_ticket: await stapledTicket(this.target, signal),
-      security_facets: deriveSecurityFacets({
-        signed: !aggregateUnsigned,
-        codeDirectory: parsed.code_directory,
-        entitlements: entitlementValue.value,
-        entitlementsKnown: unsigned || entitlements.value.exitCode === 0,
-        mixedSlices: mixedSigning,
-        appleOrigin,
-        signatureInvalid: mainInvalid,
-      }),
-      provenance,
-      limitations,
-    });
-    return ok({
-      result: jsonValueSchema.parse(result),
-      provenance,
-      limitations: result.limitations,
-      locations: [],
-    });
-  }
-
-  /**
-   * Whether Mach-O slices differ in signing state. Aggregate `codesign -d`
-   * calls without `-a` report only the host-native slice of a universal
-   * binary, so universal files get per-slice probing before any aggregate
-   * signing claim; thin files keep the aggregate requirements/entitlements
-   * gate.
-   */
-  async #sliceSigningState(
-    format: string | null,
-    requirements: NativeCommandCapture,
-    entitlements: NativeCommandCapture,
-    unsigned: boolean,
-    signal?: AbortSignal,
-  ): Promise<
-    Result<
-      {
-        readonly mixed: boolean;
-        readonly captures: readonly NativeCommandCapture[];
-        readonly limitations: readonly string[];
-        readonly signed?: boolean;
-        readonly classificationUnknown: boolean;
-      },
-      AnalysisError
-    >
-  > {
-    const universal = signatureArchitectures(format, this.target).length > 1;
-    const gate =
-      !unsigned &&
-      (isNonzeroUnsignedObservation(requirements) ||
-        isNonzeroUnsignedObservation(entitlements));
-    if (!gate && !universal)
-      return ok({
-        mixed: false,
-        captures: [],
-        limitations: [],
-        classificationUnknown: false,
-      });
-    const slices = await this.#inspectMixedSignatureSlices(
-      format,
-      requirements.exitCode !== 0,
-      entitlements.exitCode !== 0,
-      signal,
-    );
-    if (!slices.ok) return slices;
-    return ok({
-      mixed: gate || (universal && slices.value.mixed),
-      captures: slices.value.captures,
-      limitations: slices.value.limitations,
-      ...(slices.value.signed === undefined
-        ? {}
-        : { signed: slices.value.signed }),
-      classificationUnknown: slices.value.classificationUnknown,
-    });
-  }
-
-  /** Local verification of the opened code, including nested code. */
-  #verifySignature(
-    path: string,
-    signal?: AbortSignal,
-  ): Promise<Result<NativeCommandCapture, AnalysisError>> {
-    // --deep verifies nested frameworks, helpers, extensions and XPC services.
-    return this.#run(
-      "inspect_signature",
-      "codesign",
-      ["--verify", "--deep", "--strict", "--verbose=2", path],
-      { signal, acceptNonZero: true },
-    );
-  }
-
-  async #inspectMixedSignatureSlices(
-    format: string | null,
-    requirementsUnavailable: boolean,
-    entitlementsUnavailable: boolean,
-    signal?: AbortSignal,
-  ): Promise<Result<MixedSignatureSlices, AnalysisError>> {
-    const captures: NativeCommandCapture[] = [];
-    const signed: string[] = [];
-    const unsigned: string[] = [];
-    const unclassified: string[] = [];
-    const postures = new Map<string, string>();
-    for (const architecture of signatureArchitectures(format, this.target)) {
-      const slice = await this.#run(
-        "inspect_signature",
-        "codesign",
-        ["-d", "-a", architecture, "--verbose=4", this.target.path],
-        { signal, acceptNonZero: true },
-      );
-      if (!slice.ok) return slice;
-      captures.push(slice.value);
-      if (slice.value.exitCode === 0) {
-        signed.push(architecture);
-        const posture = await this.#slicePosture(
-          architecture,
-          slice.value,
-          signal,
-        );
-        if (!posture.ok) return posture;
-        captures.push(posture.value.capture);
-        if (posture.value.posture === null) unclassified.push(architecture);
-        else postures.set(architecture, posture.value.posture);
-        continue;
-      }
-      if (isNonzeroUnsignedObservation(slice.value))
-        unsigned.push(architecture);
-      else unclassified.push(architecture);
-    }
-    // Slices differ in signing state when a signed slice coexists with an
-    // unsigned or unclassifiable one; all-signed or all-unsigned files agree.
-    // Signed slices can still disagree among themselves: per-architecture
-    // display is authoritative per slice, so differing flags or entitlements
-    // also make the aggregate facets unknown.
-    const summary = summarizeSignatureSlices({
-      signed,
-      unsigned,
-      unclassified,
-      postures,
-    });
-    const limitations: string[] = [];
-    if (unsigned.length > 0)
-      limitations.push(`Unsigned Mach-O slices: ${unsigned.join(", ")}.`);
-    if (
-      summary.postureDiffers &&
-      unsigned.length === 0 &&
-      unclassified.length === 0
-    )
-      limitations.push(
-        "Signed Mach-O slices differ in CodeDirectory flags or entitlements; aggregate facets are unknown.",
-      );
-    if (unclassified.length > 0)
-      limitations.push(
-        `Signature state could not be classified for Mach-O slices: ${unclassified.join(", ")}.`,
-      );
-    if (requirementsUnavailable)
-      limitations.push(
-        "The aggregate designated requirement is unavailable because Mach-O slices have mixed signing states.",
-      );
-    if (entitlementsUnavailable)
-      limitations.push(
-        "The aggregate entitlements are unavailable because Mach-O slices have mixed signing states.",
-      );
-    return ok({ captures, limitations, ...summary });
-  }
-
-  /**
-   * Canonical posture of one signed slice: sorted CodeDirectory flag names and
-   * entitlements. Null when the slice display cannot be parsed; the slice
-   * still counts as signed from its zero exit code.
-   */
-  async #slicePosture(
-    architecture: string,
-    display: NativeCommandCapture,
-    signal?: AbortSignal,
-  ): Promise<
-    Result<
-      {
-        readonly posture: string | null;
-        readonly capture: NativeCommandCapture;
-      },
-      AnalysisError
-    >
-  > {
-    const entitlements = await this.#run(
-      "inspect_signature",
-      "codesign",
-      ["-d", "--entitlements", ":-", "-a", architecture, this.target.path],
-      { signal, acceptNonZero: true },
-    );
-    if (!entitlements.ok) return entitlements;
-    const parsed = parseCodeSignature(display.stderr, false, [
-      this.target.path,
-    ]);
-    const directory = parsed.code_directory;
-    if (
-      directory?.flags === null ||
-      directory === null ||
-      entitlements.value.exitCode !== 0
-    )
-      return ok({ posture: null, capture: entitlements.value });
-    const entitlementValue = parseEntitlements(entitlements.value.stdout);
-    return ok({
-      posture: canonicalJson(
-        {
-          flags: directory.flags.value,
-          platform: directory.platform_identifier,
-          entitlements: entitlementValue.value,
-        },
-        "Signature slice posture",
-      ),
-      capture: entitlements.value,
+    return inspectNativeSignature({
+      target: this.target,
+      capture: (argv, commandSignal) =>
+        this.#run("inspect_signature", "codesign", argv, {
+          signal: commandSignal,
+          acceptNonZero: true,
+        }),
+      invocation: (capture) => invocation(capture, this.target.path),
+      ...(signal === undefined ? {} : { signal }),
     });
   }
 
@@ -795,22 +451,6 @@ class NativeMacOSClient implements AnalysisClient {
   }
 }
 
-interface NativeObservation {
-  readonly result: JsonValue;
-  readonly provenance: readonly NativeCommandInvocation[];
-  readonly limitations: readonly string[];
-  readonly locations: readonly EvidenceLocation[];
-}
-
-interface MixedSignatureSlices {
-  readonly captures: readonly NativeCommandCapture[];
-  readonly limitations: readonly string[];
-  /** A signed slice coexists with an unsigned or unclassifiable one. */
-  readonly mixed: boolean;
-  readonly signed: boolean | undefined;
-  readonly classificationUnknown: boolean;
-}
-
 const isNativeOperation = (
   operation: AnalysisOperation,
 ): operation is NativeToolName =>
@@ -831,41 +471,6 @@ const translateCommandFailure = (
   return new ProviderAdapterError(IDENTITY.id, operation, { cause: failure });
 };
 
-const translateCodeSignExitFailure = (
-  capture: NativeCommandCapture,
-): AnalysisError =>
-  translateCommandFailure(
-    "inspect_signature",
-    new NativeCommandFailure("codesign", "nonzero-exit", capture.exitCode),
-  );
-
-const commandOutput = (capture: NativeCommandCapture): string =>
-  `${capture.stdout}\n${capture.stderr}`;
-
-/**
- * A signed artifact exits zero; its diagnostics can still contain this text
- * through the echoed path or identifier.
- */
-const isNonzeroUnsignedObservation = (capture: NativeCommandCapture): boolean =>
-  capture.exitCode !== null &&
-  capture.exitCode !== 0 &&
-  /not signed at all|code object is not signed/iu.test(commandOutput(capture));
-
-const canonicalPath = async (path: string): Promise<string[]> => {
-  try {
-    return [await realpath(path)];
-  } catch {
-    return [];
-  }
-};
-
-const codeSignCaptureFailure = (
-  capture: NativeCommandCapture,
-): AnalysisError | null =>
-  capture.exitCode === 0 || isNonzeroUnsignedObservation(capture)
-    ? null
-    : translateCodeSignExitFailure(capture);
-
 const invocation = (
   capture: NativeCommandCapture,
   artifactPath: string,
@@ -885,18 +490,6 @@ const invocation = (
   stdout_bytes: capture.stdoutBytes,
   stderr_bytes: capture.stderrBytes,
 });
-
-const parseEntitlements = (
-  output: string,
-): { readonly value: JsonValue; readonly omittedPrototypeKeys: number } => {
-  const start = output.indexOf("<?xml");
-  const end = output.lastIndexOf("</plist>");
-  if (start < 0 || end < start) return { value: null, omittedPrototypeKeys: 0 };
-  const { value, omittedPrototypeKeys } = parseXmlPropertyList(
-    output.slice(start, end + "</plist>".length),
-  );
-  return { value: jsonValueSchema.parse(value), omittedPrototypeKeys };
-};
 
 /**
  * Report a plist that cannot be decoded as the caller's selection, or as the

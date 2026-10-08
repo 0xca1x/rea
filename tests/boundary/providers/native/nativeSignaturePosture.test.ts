@@ -388,14 +388,28 @@ describe("native signature posture slice-aware cases", () => {
     const result = inspectSignatureSchema.parse(signature.value.result);
     expect(result.verification?.status).toBe("unknown");
     expect(result.limitations).toContainEqual(
-      expect.stringContaining(
-        "operational failure, not a proven broken signature",
-      ),
+      expect.stringContaining("not a proven broken signature"),
     );
   });
 });
 
 describe("signature architecture coverage", () => {
+  it("does not let uncertain display probes hide definitive verification failure", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new DefiniteInvalidWithUncertainSlicesRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    expect(result.signed).toBe(true);
+    expect(result.verification?.status).toBe("invalid");
+    expect(result.limitations).toContainEqual(
+      expect.stringContaining("could not be classified"),
+    );
+  });
   it("does not turn inconclusive slice probes into an unsigned claim", async () => {
     const { app, executable } = await fixtureApp(undefined);
     const signature = await new NativeMacOSProvider(
@@ -601,6 +615,20 @@ class InconclusiveSlicesRunner extends FixtureRunner {
       stderr,
       exitCode: 1,
       stdoutBytes: 0,
+      stderrBytes: Buffer.byteLength(stderr),
+    });
+  }
+}
+
+/** Slice display uncertainty and an independently established invalid signature. */
+class DefiniteInvalidWithUncertainSlicesRunner extends InconclusiveSlicesRunner {
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || arguments_[0] !== "--verify") return result;
+    const stderr = `${arguments_.at(-1)}: invalid signature\n`;
+    return ok({
+      ...result.value,
+      stderr,
       stderrBytes: Buffer.byteLength(stderr),
     });
   }
