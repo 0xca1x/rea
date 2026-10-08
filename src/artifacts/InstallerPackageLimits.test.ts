@@ -155,3 +155,20 @@ it("observes cancellation during internal symlink drains", async () => {
     await reader.close();
   }
 });
+
+it("verifies gzip integrity even when the cpio trailer has already been decoded", async () => {
+  const bytes = Buffer.from(
+    gzipCpio([{ name: "a", mode: MODE.file, data: "ok" }]),
+  );
+  bytes[bytes.length - 8] = (bytes[bytes.length - 8] ?? 0) ^ 1;
+  const reader = new CpioArtifactReader(async () => Readable.from([bytes]));
+  try {
+    await expect(
+      (async () => {
+        for await (const entry of reader.entries()) void entry;
+      })(),
+    ).rejects.toMatchObject({ reason: "format" });
+  } finally {
+    await reader.close();
+  }
+});

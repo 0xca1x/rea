@@ -4,6 +4,7 @@ import {
   ArtifactDecodedBudget,
 } from "./ArtifactDecodedBudget.js";
 import { createGunzip } from "node:zlib";
+import { artifactStreamPipeline } from "./ArtifactStreamPipeline.js";
 
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
 import {
@@ -87,6 +88,18 @@ class ByteSource {
 
   async close(): Promise<void> {
     await this.#iterator.return?.();
+  }
+
+  /** Consume legal zero padding through decoder EOF, including gzip trailer verification. */
+  async finish(): Promise<void> {
+    do {
+      if (this.#buffer.some((byte) => byte !== 0))
+        throw new ArtifactReaderFailure(
+          "format",
+          "cpio has non-padding bytes after its trailer",
+        );
+      this.#buffer = Buffer.alloc(0);
+    } while (await this.#fill());
   }
 }
 
@@ -262,41 +275,16 @@ export class CpioArtifactReader implements ArtifactReader {
   async *entries(signal?: AbortSignal): AsyncIterable<ArtifactEntry> {
     this.#signal = signal;
     const compressed = await this.openCompressed(signal);
-    const gunzip = createGunzip();
-    // `pipe()` does not forward source errors (cancellation, truncation);
-    // propagate them so the MCP process fails as a tagged Artifact failure.
-    compressed.on("error", (cause: unknown) => {
-      gunzip.destroy(
-        cause instanceof ArtifactReaderFailure
-          ? cause
-          : new ArtifactReaderFailure("format", "cpio stream failed", {
-              cause,
-            }),
-      );
-    });
-    gunzip.on("error", () => {
-      // Prevent unhandled source errors after the decoder fails first.
-      compressed.destroy();
-    });
-    const budget = new ArtifactBudgetTransform(
-      this.decodedBudget,
-      "gzip-cpio",
-      signal,
+    const source = new ByteSource(
+      artifactStreamPipeline(
+        compressed,
+        [
+          createGunzip(),
+          new ArtifactBudgetTransform(this.decodedBudget, "gzip-cpio", signal),
+        ],
+        { path: "gzip-cpio", signal },
+      ),
     );
-    gunzip.on("error", (cause: unknown) => {
-      budget.destroy(
-        cause instanceof ArtifactReaderFailure
-          ? cause
-          : new ArtifactReaderFailure("format", "cpio stream failed", {
-              cause,
-            }),
-      );
-    });
-    budget.on("error", () => {
-      compressed.destroy();
-      gunzip.destroy();
-    });
-    const source = new ByteSource(compressed.pipe(gunzip).pipe(budget));
     this.#source = source;
     for (let index = 0; ; index++) {
       if (signal?.aborted === true)
@@ -342,6 +330,12 @@ export class CpioArtifactReader implements ArtifactReader {
         );
       }
       if (raw === TRAILER) {
+        if (header.fileSize !== 0)
+          throw new ArtifactReaderFailure(
+            "format",
+            "cpio trailer declares member data",
+          );
+        await source.finish();
         yield* this.#unresolvedLinks();
         return;
       }

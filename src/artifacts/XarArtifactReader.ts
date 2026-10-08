@@ -1,17 +1,13 @@
 import { createHash, type Hash } from "node:crypto";
 import { open, type FileHandle } from "node:fs/promises";
-import {
-  PassThrough,
-  Readable,
-  Transform,
-  type TransformCallback,
-} from "node:stream";
+import { Readable, Transform, type TransformCallback } from "node:stream";
 import { createInflate, inflateSync } from "node:zlib";
 
 import { DOMParser, type Element, type Node } from "@xmldom/xmldom";
 
 import type { ArtifactCommand } from "../domain/artifactGraph.js";
 import { ArtifactDecodedBudget } from "./ArtifactDecodedBudget.js";
+import { artifactStreamPipeline } from "./ArtifactStreamPipeline.js";
 import {
   xarInteger as integer,
   xarHeapPosition,
@@ -29,18 +25,18 @@ const XAR_MAGIC = 0x78617221;
 const MAX_TOC_BYTES = 64 * 1024 * 1024;
 const READ_CHUNK_BYTES = 1024 * 1024;
 
-const CHECKSUM_ALGORITHMS: Readonly<Record<string, string>> = {
-  sha1: "sha1",
-  md5: "md5",
-  sha256: "sha256",
-  sha512: "sha512",
-};
-const DIGEST_BYTES: Readonly<Record<string, number>> = {
-  sha1: 20,
-  md5: 16,
-  sha256: 32,
-  sha512: 64,
-};
+const CHECKSUM_ALGORITHMS: ReadonlyMap<string, string> = new Map([
+  ["sha1", "sha1"],
+  ["md5", "md5"],
+  ["sha256", "sha256"],
+  ["sha512", "sha512"],
+]);
+const DIGEST_BYTES: ReadonlyMap<string, number> = new Map([
+  ["sha1", 20],
+  ["md5", 16],
+  ["sha256", 32],
+  ["sha512", 64],
+]);
 
 const cancelled = (signal?: AbortSignal): void => {
   if (signal?.aborted === true)
@@ -102,7 +98,7 @@ const parseChecksum = (
   if (element === undefined) return undefined;
   const style = element.getAttribute("style")?.toLowerCase() ?? "";
   const value = (element.textContent ?? "").trim().toLowerCase();
-  if (CHECKSUM_ALGORITHMS[style] === undefined)
+  if (CHECKSUM_ALGORITHMS.get(style) === undefined)
     return { unsupported: style || "(missing style)", value };
   return { algorithm: style, value };
 };
@@ -529,7 +525,7 @@ export class XarArtifactReader implements ArtifactReader {
         "format",
         `xar TOC checksum style ${style || "(missing)"} does not match header algorithm ${expectedStyle ?? "none"}`,
       );
-    const algorithm = CHECKSUM_ALGORITHMS[style];
+    const algorithm = CHECKSUM_ALGORITHMS.get(style);
     if (algorithm === undefined)
       throw new ArtifactReaderFailure(
         "format",
@@ -537,7 +533,7 @@ export class XarArtifactReader implements ArtifactReader {
       );
     const size = integer(textOf(checksum, "size"), "checksum size");
     // The stored checksum is exactly one digest; never allocate a declared size.
-    if (size !== DIGEST_BYTES[style])
+    if (size !== DIGEST_BYTES.get(style))
       throw new ArtifactReaderFailure(
         "format",
         `xar TOC declares a ${size}-byte ${style} checksum`,
@@ -748,58 +744,21 @@ export class XarArtifactReader implements ArtifactReader {
                   this.#integrity.set(entry.adapterKey, [observation]);
                 },
           );
-    const raw = Readable.from(this.#chunks(data.offset, data.length, signal));
-    raw.on("error", (cause: unknown) =>
-      archivedVerifier?.destroy(memberFailure(entry.path, cause)),
-    );
-    const archivedChecked =
-      archivedVerifier === undefined ? raw : raw.pipe(archivedVerifier);
-    let decoded: Readable;
-    if (data.encoding === "application/octet-stream") decoded = archivedChecked;
-    else {
-      // xar's "x-gzip" members are zlib streams; bound decoded output to the
-      // declared extracted size so a gzip bomb cannot exhaust the process.
-      const inflate = createInflate();
-      raw.on("error", (cause: unknown) =>
-        inflate.destroy(memberFailure(entry.path, cause)),
+    const stages: Transform[] =
+      archivedVerifier === undefined ? [] : [archivedVerifier];
+    if (data.encoding === "application/x-gzip")
+      stages.push(
+        createInflate(),
+        new SizeBound(entry.path, data.size, this.decodedBudget, signal),
       );
-      // Checksum failures emit on archivedChecked, which pipe() does not
-      // forward; without this the integrity error becomes unhandled instead
-      // of rolling back extraction with the tagged failure.
-      archivedChecked.on("error", (cause: unknown) =>
-        inflate.destroy(memberFailure(entry.path, cause)),
-      );
-      const inflated = archivedChecked.pipe(inflate);
-      const bounded = new SizeBound(
-        entry.path,
-        data.size,
-        this.decodedBudget,
-        signal,
-      );
-      inflated.on("error", (cause: unknown) =>
-        bounded.destroy(memberFailure(entry.path, cause)),
-      );
-      decoded = inflated.pipe(bounded);
-    }
     const checksum = data.extractedChecksum;
-    const verified =
-      checksum === undefined || !this.#verifyChecksums
-        ? new PassThrough()
-        : new ChecksumVerifier(entry.path, checksum);
-    // Decoder errors become tagged failures; cancellation stays tagged.
-    decoded.on("error", (cause: unknown) =>
-      verified.destroy(memberFailure(entry.path, cause)),
+    if (checksum !== undefined && this.#verifyChecksums)
+      stages.push(new ChecksumVerifier(entry.path, checksum));
+    return artifactStreamPipeline(
+      Readable.from(this.#chunks(data.offset, data.length, signal)),
+      stages,
+      { path: entry.path, signal },
     );
-    const out = decoded.pipe(verified);
-    // Tear down the source chain when the consumer is done: otherwise a
-    // consumer that stops early (or a checksum failure at flush) leaves the
-    // generator suspended, and its next read after close() surfaces as an
-    // unhandled "archive is closed" failure.
-    out.on("close", () => {
-      raw.destroy();
-      archivedVerifier?.destroy();
-    });
-    return out;
   }
 
   async *#chunks(
@@ -832,13 +791,3 @@ export class XarArtifactReader implements ArtifactReader {
     await handle?.close();
   }
 }
-
-/** Keep tagged failures; any other decoder error means malformed member bytes. */
-const memberFailure = (path: string, cause: unknown): ArtifactReaderFailure =>
-  cause instanceof ArtifactReaderFailure
-    ? cause
-    : new ArtifactReaderFailure(
-        "format",
-        `xar member ${path} could not be decoded`,
-        { cause },
-      );

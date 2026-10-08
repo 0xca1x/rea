@@ -1,16 +1,10 @@
-import { isAbsolute } from "node:path";
-
-import {
-  ArtifactPathRegistry,
-  normalizeArtifactPath,
-} from "../ArtifactPaths.js";
+import { ArtifactPathRegistry } from "../ArtifactPaths.js";
+import { visitArtifactTree } from "../ArtifactTraversal.js";
 import {
   ArtifactReaderFailure,
   type ArtifactEntry,
   type ArtifactReader,
 } from "../ArtifactReader.js";
-import { AsarArtifactReader } from "../AsarArtifactReader.js";
-import { CpioArtifactReader } from "../CpioArtifactReader.js";
 import type { ArtifactNode } from "../../domain/artifactGraph.js";
 import {
   classifyArtifactContent,
@@ -77,7 +71,7 @@ export const scanReader = async (
     registry: new ArtifactPathRegistry(),
     expandedContainerIds: new Set<string>(),
   };
-  await visitArtifactEntries(context, reader, "");
+  await visitArtifactEntries(context, reader);
   // Archive directories may appear after their children. Resolve containment
   // against the complete index before directory identities are materialized.
   for (const occurrence of occurrences)
@@ -93,47 +87,17 @@ export const scanReader = async (
 const visitArtifactEntries = async (
   context: ScanContext,
   currentReader: ArtifactReader,
-  prefix: string,
 ): Promise<void> => {
-  const stack: Array<{
-    readonly reader: ArtifactReader;
-    readonly prefix: string;
-    readonly iterator: AsyncIterator<ArtifactEntry>;
-    readonly owned: boolean;
-  }> = [
-    {
-      reader: currentReader,
-      prefix,
-      iterator: currentReader.entries(context.signal)[Symbol.asyncIterator](),
-      owned: false,
-    },
-  ];
-  try {
-    while (stack.length > 0) {
-      const frame = stack.at(-1);
-      if (frame === undefined) break;
-      const next = await frame.iterator.next();
-      if (next.done) {
-        stack.pop();
-        if (frame.owned) await frame.reader.close();
-        continue;
-      }
-      const entry = next.value;
-      const logicalPath = normalizeArtifactPath(
-        frame.prefix.length === 0
-          ? entry.path
-          : `${frame.prefix}/${entry.path}`,
-      );
-      const expandable =
-        isExpandableAsar(entry, logicalPath) ||
-        entry.nestedArchive === "gzip-cpio";
+  await visitArtifactTree(
+    currentReader,
+    async ({ reader, entry, path: logicalPath, container: expandable }) => {
       context.registry.add(logicalPath, expandable ? "directory" : entry.kind);
       const occurrence = createOccurrence(entry, logicalPath, null);
       let digested: DigestedEntry | undefined;
       try {
         digested = await digestArtifactEntry(
           context,
-          frame.reader,
+          reader,
           entry,
           logicalPath,
         );
@@ -156,7 +120,7 @@ const visitArtifactEntries = async (
           );
           context.occurrences.push(occurrence);
           context.occurrenceByPath.set(logicalPath, occurrence);
-          continue;
+          return false;
         }
         occurrence.hash_status = "unavailable";
         occurrence.limitations.push(UNAVAILABLE_UNPACKED_LIMITATION);
@@ -176,35 +140,14 @@ const visitArtifactEntries = async (
       context.occurrences.push(occurrence);
       context.occurrenceByPath.set(logicalPath, occurrence);
       if (expandable && digested?.mismatched !== true) {
-        const parent = frame.reader;
-        const nested: ArtifactReader =
-          entry.nestedArchive === "gzip-cpio"
-            ? new CpioArtifactReader(
-                (signal) => parent.open(entry, signal),
-                context.integrity.mode,
-                parent.decodedBudget,
-              )
-            : new AsarArtifactReader(entry.adapterKey);
         // Only traversed containers can own members, not opaque archive-named files.
         context.expandedContainerIds.add(occurrence.occurrence_id);
-        stack.push({
-          reader: nested,
-          prefix: logicalPath,
-          iterator: nested.entries(context.signal)[Symbol.asyncIterator](),
-          owned: true,
-        });
+        return true;
       }
-    }
-  } finally {
-    await Promise.allSettled(
-      stack
-        .filter(({ owned }) => owned)
-        .map(async ({ reader, iterator }) => {
-          await iterator.return?.();
-          await reader.close();
-        }),
-    );
-  }
+      return false;
+    },
+    { signal: context.signal, integrity: context.integrity.mode },
+  );
 };
 
 interface DigestedEntry {
@@ -295,11 +238,6 @@ const digestArtifactEntry = async (
     ],
   };
 };
-
-const isExpandableAsar = (entry: ArtifactEntry, logicalPath: string): boolean =>
-  entry.kind === "file" &&
-  logicalPath.toLowerCase().endsWith(".asar") &&
-  isAbsolute(entry.adapterKey);
 
 const isUnavailableUnpackedEntry = (
   cause: unknown,

@@ -2,12 +2,9 @@ import { lstat, realpath } from "node:fs/promises";
 
 import { canonicalDigest } from "../../domain/comparisonSemantics.js";
 import { AsarArtifactReader } from "../AsarArtifactReader.js";
-import { CpioArtifactReader } from "../CpioArtifactReader.js";
 import { XarArtifactReader } from "../XarArtifactReader.js";
-import {
-  ArtifactPathRegistry,
-  normalizeArtifactPath,
-} from "../ArtifactPaths.js";
+import { ArtifactPathRegistry } from "../ArtifactPaths.js";
+import { visitArtifactTree } from "../ArtifactTraversal.js";
 import {
   ArtifactReaderFailure,
   type ArtifactEntry,
@@ -131,91 +128,55 @@ const materializeSelection = async ({
   const output = await SafeOutputTree.create(input.outputRoot);
   let readerClosed = false;
   const extracted: ExtractedOccurrence[] = [];
-  const stack: Array<{
-    readonly reader: ArtifactReader;
-    readonly prefix: string;
-    readonly iterator: AsyncIterator<ArtifactEntry>;
-    readonly owned: boolean;
-  }> = [
-    {
-      reader,
-      prefix: "",
-      iterator: reader.entries(signal)[Symbol.asyncIterator](),
-      owned: false,
-    },
-  ];
   try {
     const materialized: SelectedOccurrence[] = [];
     const registry = new ArtifactPathRegistry();
-    while (stack.length > 0) {
-      const frame = stack[stack.length - 1];
-      if (frame === undefined) break;
-      const next = await frame.iterator.next();
-      if (next.done === true) {
-        stack.pop();
-        if (frame.owned) await frame.reader.close();
-        continue;
-      }
-      const entry = next.value;
-      const path = normalizeArtifactPath(
-        frame.prefix === "" ? entry.path : `${frame.prefix}/${entry.path}`,
-      );
-      // Traverse expanded PKG Payload/Scripts like inventory does, so nested
-      // members are materialized instead of silently skipped. An expanded
-      // member acts as a container: register it as a directory and leave its
-      // archive bytes to its children, since a file and a directory cannot
-      // share one output path.
-      const expandable =
-        entry.nestedArchive === "gzip-cpio" &&
-        !entry.encrypted &&
-        entry.contentUnavailable !== true;
-      registry.add(path, expandable ? "directory" : entry.kind);
-      if (expandable) {
-        const parent = frame.reader;
-        const nested = new CpioArtifactReader(
-          (nestedSignal) => parent.open(entry, nestedSignal),
-          "fail",
-          parent.decodedBudget,
+    await visitArtifactTree(
+      reader,
+      async ({ reader: currentReader, entry, path, container: expandable }) => {
+        // Traverse expanded PKG Payload/Scripts like inventory does, so nested
+        // members are materialized instead of silently skipped. An expanded
+        // member acts as a container: register it as a directory and leave its
+        // archive bytes to its children, since a file and a directory cannot
+        // share one output path.
+        registry.add(path, expandable ? "directory" : entry.kind);
+        if (expandable) {
+          return true;
+        }
+        const selectedItem = byPath.get(path);
+        if (selectedItem === undefined) {
+          if (
+            entry.contentUnavailable === true &&
+            inventory.unavailablePaths.includes(path)
+          )
+            return false;
+          if (entry.kind === "file" || entry.kind === "slice")
+            throw new ArtifactReaderFailure(
+              "integrity",
+              `Regular artifact entry is missing from inventory: ${path}`,
+            );
+          return false;
+        }
+        preflight(entry);
+        const stream = await currentReader.open(entry, signal);
+        const written = await output.write(
+          path,
+          stream,
+          selectedItem.node.sha256,
+          signal,
         );
-        stack.push({
-          reader: nested,
-          prefix: path,
-          iterator: nested.entries(signal)[Symbol.asyncIterator](),
-          owned: true,
+        extracted.push({
+          artifact_id: selectedItem.node.artifact_id,
+          relative_path: written.relativePath,
+          sha256: written.sha256,
+          bytes_written: written.bytesWritten,
+          created: true,
         });
-        continue;
-      }
-      const selectedItem = byPath.get(path);
-      if (selectedItem === undefined) {
-        if (
-          entry.contentUnavailable === true &&
-          inventory.unavailablePaths.includes(path)
-        )
-          continue;
-        if (entry.kind === "file" || entry.kind === "slice")
-          throw new ArtifactReaderFailure(
-            "integrity",
-            `Regular artifact entry is missing from inventory: ${path}`,
-          );
-        continue;
-      }
-      preflight(entry);
-      const stream = await frame.reader.open(entry, signal);
-      const written = await output.write(
-        path,
-        stream,
-        selectedItem.node.sha256,
-        signal,
-      );
-      extracted.push({
-        artifact_id: selectedItem.node.artifact_id,
-        relative_path: written.relativePath,
-        sha256: written.sha256,
-        bytes_written: written.bytesWritten,
-        created: true,
-      });
-      materialized.push(selectedItem);
-    }
+        materialized.push(selectedItem);
+        return false;
+      },
+      { signal, expandAsar: false },
+    );
     await reader.close();
     readerClosed = true;
     extracted.sort((left, right) =>
@@ -230,14 +191,6 @@ const materializeSelection = async ({
     await output.commit();
     return result;
   } catch (cause: unknown) {
-    await Promise.allSettled(
-      stack
-        .filter(({ owned }) => owned)
-        .map(async ({ reader, iterator }) => {
-          await iterator.return?.();
-          await reader.close();
-        }),
-    );
     if (!readerClosed)
       await reader.close().catch((cause: unknown) => {
         // best-effort cleanup: reader close must not mask the extraction failure.
