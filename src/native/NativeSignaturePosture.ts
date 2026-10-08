@@ -143,9 +143,11 @@ export const stapledTicket = async (
     try {
       const opened = await handle.stat();
       if (!opened.isFile()) return absent;
-      // If the path was replaced between lstat and open, or during hashing,
-      // the digest would describe the wrong bytes; report it as changed.
-      if (opened.dev !== metadata.dev || opened.ino !== metadata.ino)
+      // If the path was replaced between lstat and open, or mutated while
+      // hashing, the digest would describe the wrong bytes: dev and ino catch
+      // replacement, while size and mtime catch same-inode writes. Report any
+      // drift as changed instead of a stale digest.
+      if (!sameTicketFile(opened, metadata))
         return {
           status: "unreadable",
           path: relative,
@@ -165,7 +167,7 @@ export const stapledTicket = async (
       }
       signal?.throwIfAborted();
       const closing = await handle.stat();
-      if (closing.dev !== opened.dev || closing.ino !== opened.ino)
+      if (!sameTicketFile(closing, opened) || size !== opened.size)
         return {
           status: "unreadable",
           path: relative,
@@ -178,7 +180,7 @@ export const stapledTicket = async (
       // refuse a digest that no longer belongs to the bundle.
       try {
         const current = await lstat(path);
-        if (current.dev !== opened.dev || current.ino !== opened.ino)
+        if (!sameTicketFile(current, opened))
           return {
             status: "unreadable",
             path: relative,
@@ -221,6 +223,33 @@ export const stapledTicket = async (
     throw cause;
   }
 };
+
+/**
+ * Whether two observations describe the same file version. Device and inode
+ * catch replacement; size and mtime catch same-inode writes and truncations
+ * whose digest would otherwise mix multiple file states.
+ */
+const sameTicketFile = (
+  left: {
+    readonly dev: number;
+    readonly ino: number;
+    readonly size: number;
+    readonly mtimeMs: number;
+    readonly ctimeMs: number;
+  },
+  right: {
+    readonly dev: number;
+    readonly ino: number;
+    readonly size: number;
+    readonly mtimeMs: number;
+    readonly ctimeMs: number;
+  },
+): boolean =>
+  left.dev === right.dev &&
+  left.ino === right.ino &&
+  left.size === right.size &&
+  left.mtimeMs === right.mtimeMs &&
+  left.ctimeMs === right.ctimeMs;
 
 const absent = {
   status: "absent",

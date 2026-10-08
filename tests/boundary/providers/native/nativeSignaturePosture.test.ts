@@ -350,6 +350,31 @@ describe("native signature posture slice-aware cases", () => {
     );
   });
 
+  it("marks facets unknown when signed slices differ in posture", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new UniversalPostureDiffRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    // Every slice verifies, but their CodeDirectory flags disagree.
+    expect(result.verification?.status).toBe("valid");
+    expect(
+      result.security_facets.find(
+        ({ facet }) => facet === "library-validation",
+      ),
+    ).toMatchObject({
+      state: "unknown",
+      evidence: ["architecture slices differ in signing state"],
+    });
+    expect(result.limitations).toContainEqual(
+      expect.stringContaining("differ in CodeDirectory flags or entitlements"),
+    );
+  });
+
   it("reports verification I/O failures as unknown, not invalid", async () => {
     const { app, executable } = await fixtureApp(undefined);
     const signature = await new NativeMacOSProvider(
@@ -366,6 +391,44 @@ describe("native signature posture slice-aware cases", () => {
         "operational failure, not a proven broken signature",
       ),
     );
+  });
+});
+
+describe("signature architecture coverage", () => {
+  it("probes a valid x86_64h subtype rather than dropping it", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new UniversalMixedRunner("x86_64h"),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    expect(result.limitations).toContain("Unsigned Mach-O slices: x86_64h.");
+    expect(
+      result.security_facets.every(({ state }) => state === "unknown"),
+    ).toBe(true);
+  });
+
+  it("retains per-slice entitlement captures used to compare posture", async () => {
+    const { app, executable } = await fixtureApp(undefined);
+    const signature = await new NativeMacOSProvider(
+      new UniversalPostureDiffRunner(),
+      "darwin",
+    )
+      .createClient(machoTarget(executable, app))
+      .execute("inspect_signature", {});
+    if (!signature.ok) throw signature.error;
+    const result = inspectSignatureSchema.parse(signature.value.result);
+    const commands = result.provenance.filter(
+      ({ command }) =>
+        command.includes("-a") && command.includes("--entitlements"),
+    );
+    expect(commands).toHaveLength(2);
+    expect(result.entitlements).toEqual({
+      "com.apple.security.app-sandbox": true,
+    });
   });
 });
 
@@ -452,12 +515,16 @@ class NestedOnlyFailureRunner extends FixtureRunner {
  * slice while the x86_64 slice is unsigned.
  */
 class UniversalMixedRunner extends FixtureRunner {
+  constructor(private readonly foreignArchitecture = "x86_64") {
+    super();
+  }
   override async run(tool: string, arguments_: readonly string[]) {
     const result = await super.run(tool, arguments_);
     if (!result.ok || tool !== "codesign") return result;
     const architectureIndex = arguments_.indexOf("-a");
     if (architectureIndex >= 0) {
-      if (arguments_[architectureIndex + 1] !== "x86_64") return result;
+      if (arguments_[architectureIndex + 1] !== this.foreignArchitecture)
+        return result;
       const stderr = `${arguments_.at(-1)}: code object is not signed at all\n`;
       return ok({
         ...result.value,
@@ -471,7 +538,7 @@ class UniversalMixedRunner extends FixtureRunner {
     if (!arguments_.includes("--verbose=4")) return result;
     const stderr = result.value.stderr.replace(
       /^Format=.*$/mu,
-      "Format=Mach-O universal (x86_64 arm64)",
+      `Format=Mach-O universal (${this.foreignArchitecture} arm64)`,
     );
     return ok({
       ...result.value,
@@ -488,6 +555,39 @@ class CarriageReturnPathRunner extends FixtureRunner {
     if (!result.ok || arguments_[0] !== "--verify") return result;
     const bundle = arguments_.at(-1) ?? "";
     const stderr = `--validated:${bundle}/Contents/Helpers/cr\r\n${bundle}: valid on disk\n`;
+    return ok({
+      ...result.value,
+      stdout: "",
+      stderr,
+      stdoutBytes: 0,
+      stderrBytes: Buffer.byteLength(stderr),
+    });
+  }
+}
+
+/**
+ * A universal binary whose slices all verify but carry different
+ * CodeDirectory flags (hardened arm64, plain x86_64).
+ */
+class UniversalPostureDiffRunner extends FixtureRunner {
+  override async run(tool: string, arguments_: readonly string[]) {
+    const result = await super.run(tool, arguments_);
+    if (!result.ok || tool !== "codesign") return result;
+    if (arguments_.includes("--entitlements")) return result;
+    const architectureIndex = arguments_.indexOf("-a");
+    const architecture =
+      architectureIndex < 0 ? null : arguments_[architectureIndex + 1];
+    let stderr = result.value.stderr;
+    if (architecture === null)
+      stderr = stderr.replace(
+        /^Format=.*$/mu,
+        "Format=Mach-O universal (x86_64 arm64)",
+      );
+    else if (architecture === "x86_64")
+      stderr = stderr.replace(
+        /flags=0x[0-9a-f]+\([^)]*\)/u,
+        "flags=0x2(adhoc)",
+      );
     return ok({
       ...result.value,
       stdout: "",

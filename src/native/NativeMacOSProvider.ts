@@ -25,6 +25,7 @@ import {
   type NativeToolName,
 } from "../contracts/native/nativeToolContracts.js";
 import type { BinaryTarget } from "../domain/binaryTarget.js";
+import { canonicalJson } from "../domain/comparisonSemantics.js";
 import type { EvidenceLocation } from "../domain/evidence.js";
 import {
   AnalysisCancelledError,
@@ -412,6 +413,10 @@ class NativeMacOSClient implements AnalysisClient {
     );
     if (!sliceState.ok) return sliceState;
     const mixedSigning = sliceState.value.mixed;
+    const aggregateUnsigned =
+      sliceState.value.signed === undefined
+        ? unsigned
+        : !sliceState.value.signed;
     captures.push(...sliceState.value.captures);
     limitations.push(...sliceState.value.limitations);
     // Only the top-level signature decides "unsigned"; unsigned nested
@@ -419,7 +424,7 @@ class NativeMacOSClient implements AnalysisClient {
     const verification = signatureVerification(
       verify.value,
       verifyPath,
-      unsigned,
+      aggregateUnsigned,
     );
     limitations.push(...(await unconfirmedNestedCode(verification)));
     if (verification.status === "unknown")
@@ -442,12 +447,13 @@ class NativeMacOSClient implements AnalysisClient {
     );
     const result = inspectSignatureSchema.parse({
       ...parsed,
+      signed: !aggregateUnsigned,
       designated_requirement: requirementText,
       entitlements: entitlementValue.value,
       verification,
       stapled_ticket: await stapledTicket(this.target, signal),
       security_facets: deriveSecurityFacets({
-        signed: !unsigned,
+        signed: !aggregateUnsigned,
         codeDirectory: parsed.code_directory,
         entitlements: entitlementValue.value,
         entitlementsKnown: unsigned || entitlements.value.exitCode === 0,
@@ -485,13 +491,12 @@ class NativeMacOSClient implements AnalysisClient {
         readonly mixed: boolean;
         readonly captures: readonly NativeCommandCapture[];
         readonly limitations: readonly string[];
+        readonly signed?: boolean;
       },
       AnalysisError
     >
   > {
-    const universalArchitectures = universalSliceArchitectures(format);
-    const universal =
-      universalArchitectures !== undefined && universalArchitectures.length > 1;
+    const universal = codeSignArchitectures(format, this.target).length > 1;
     const gate =
       !unsigned &&
       (isNonzeroUnsignedObservation(requirements) ||
@@ -509,6 +514,7 @@ class NativeMacOSClient implements AnalysisClient {
       mixed: gate || (universal && slices.value.mixed),
       captures: slices.value.captures,
       limitations: slices.value.limitations,
+      signed: slices.value.signed,
     });
   }
 
@@ -536,6 +542,7 @@ class NativeMacOSClient implements AnalysisClient {
     const signed: string[] = [];
     const unsigned: string[] = [];
     const unclassified: string[] = [];
+    const postures = new Map<string, string>();
     for (const architecture of codeSignArchitectures(format, this.target)) {
       const slice = await this.#run(
         "inspect_signature",
@@ -547,6 +554,15 @@ class NativeMacOSClient implements AnalysisClient {
       captures.push(slice.value);
       if (slice.value.exitCode === 0) {
         signed.push(architecture);
+        const posture = await this.#slicePosture(
+          architecture,
+          slice.value,
+          signal,
+        );
+        if (!posture.ok) return posture;
+        captures.push(posture.value.capture);
+        if (posture.value.posture === null) unclassified.push(architecture);
+        else postures.set(architecture, posture.value.posture);
         continue;
       }
       if (isNonzeroUnsignedObservation(slice.value))
@@ -555,11 +571,21 @@ class NativeMacOSClient implements AnalysisClient {
     }
     // Slices differ in signing state when a signed slice coexists with an
     // unsigned or unclassifiable one; all-signed or all-unsigned files agree.
+    // Signed slices can still disagree among themselves: per-architecture
+    // display is authoritative per slice, so differing flags or entitlements
+    // also make the aggregate facets unknown.
+    const postureDiffers = new Set(postures.values()).size > 1;
     const mixed =
-      signed.length > 0 && (unsigned.length > 0 || unclassified.length > 0);
+      unclassified.length > 0 ||
+      (signed.length > 0 && unsigned.length > 0) ||
+      postureDiffers;
     const limitations: string[] = [];
     if (unsigned.length > 0)
       limitations.push(`Unsigned Mach-O slices: ${unsigned.join(", ")}.`);
+    if (postureDiffers && unsigned.length === 0 && unclassified.length === 0)
+      limitations.push(
+        "Signed Mach-O slices differ in CodeDirectory flags or entitlements; aggregate facets are unknown.",
+      );
     if (unclassified.length > 0)
       limitations.push(
         `Signature state could not be classified for Mach-O slices: ${unclassified.join(", ")}.`,
@@ -572,7 +598,56 @@ class NativeMacOSClient implements AnalysisClient {
       limitations.push(
         "The aggregate entitlements are unavailable because Mach-O slices have mixed signing states.",
       );
-    return ok({ captures, limitations, mixed });
+    return ok({ captures, limitations, mixed, signed: signed.length > 0 });
+  }
+
+  /**
+   * Canonical posture of one signed slice: sorted CodeDirectory flag names and
+   * entitlements. Null when the slice display cannot be parsed; the slice
+   * still counts as signed from its zero exit code.
+   */
+  async #slicePosture(
+    architecture: string,
+    display: NativeCommandCapture,
+    signal?: AbortSignal,
+  ): Promise<
+    Result<
+      {
+        readonly posture: string | null;
+        readonly capture: NativeCommandCapture;
+      },
+      AnalysisError
+    >
+  > {
+    const entitlements = await this.#run(
+      "inspect_signature",
+      "codesign",
+      ["-d", "--entitlements", ":-", "-a", architecture, this.target.path],
+      { signal, acceptNonZero: true },
+    );
+    if (!entitlements.ok) return entitlements;
+    const parsed = parseCodeSignature(display.stderr, false, [
+      this.target.path,
+    ]);
+    const directory = parsed.code_directory;
+    if (
+      directory?.flags === null ||
+      directory === null ||
+      entitlements.value.exitCode !== 0
+    )
+      return ok({ posture: null, capture: entitlements.value });
+    const entitlementValue = parseEntitlements(entitlements.value.stdout);
+    return ok({
+      posture: canonicalJson(
+        {
+          flags: directory.flags.value,
+          platform: directory.platform_identifier,
+          entitlements: entitlementValue.value,
+        },
+        "Signature slice posture",
+      ),
+      capture: entitlements.value,
+    });
   }
 
   async #inspectPlist(
@@ -709,6 +784,7 @@ interface MixedSignatureSlices {
   readonly limitations: readonly string[];
   /** A signed slice coexists with an unsigned or unclassifiable one. */
   readonly mixed: boolean;
+  readonly signed: boolean;
 }
 
 const isNativeOperation = (
@@ -782,7 +858,7 @@ const universalSliceArchitectures = (
   const architectures = universal
     .split(/\s+/u)
     .filter((architecture) =>
-      /^(?:i386|x86_64|armv7|arm64|arm64e)$/u.test(architecture),
+      /^(?:i386|x86_64|x86_64h|armv7|arm64|arm64e)$/u.test(architecture),
     );
   return architectures.length > 0 ? [...new Set(architectures)] : undefined;
 };
@@ -791,21 +867,14 @@ const codeSignArchitectures = (
   format: string | null,
   target: BinaryTarget,
 ): string[] => {
-  const universal = /^Mach-O universal \(([^)\r\n]+)\)$/u.exec(
-    format ?? "",
-  )?.[1];
-  if (universal !== undefined) {
-    const architectures = universal
-      .split(/\s+/u)
-      .filter((architecture) =>
-        /^(?:i386|x86_64|armv7|arm64|arm64e)$/u.test(architecture),
-      );
-    if (architectures.length > 0) return [...new Set(architectures)];
-  }
-  if (target.kind !== "executable" || target.format !== "mach-o") return [];
-  return target.availableArchitectures.map((architecture) =>
-    architecture === "x86" ? "i386" : architecture,
-  );
+  const declared = universalSliceArchitectures(format) ?? [];
+  const available =
+    target.kind === "executable" && target.format === "mach-o"
+      ? target.availableArchitectures.map((architecture) =>
+          architecture === "x86" ? "i386" : architecture,
+        )
+      : [];
+  return [...new Set([...declared, ...available])];
 };
 
 const invocation = (
