@@ -10,6 +10,7 @@ import {
 } from "../../../src/artifacts/apple/DyldSharedCache.fixture.js";
 import {
   FILE_TYPE,
+  CPU,
   buildVersionCommand,
   LC,
   dylibCommand,
@@ -51,10 +52,19 @@ it("rejects a directory and overlapping combined VM mappings with specific reaso
   });
 });
 
-const dylib = (installName: string, dependencies: readonly Uint8Array[] = []) =>
+const dylib = (
+  installName: string,
+  dependencies: readonly Uint8Array[] = [],
+  platform = 1,
+) =>
   machoImage({
     fileType: FILE_TYPE.dylib,
-    commands: [dylibCommand(LC.ID_DYLIB, installName), ...dependencies],
+    cpu: CPU.arm64e,
+    commands: [
+      buildVersionCommand(platform),
+      dylibCommand(LC.ID_DYLIB, installName),
+      ...dependencies,
+    ],
   });
 
 it("rejects a same-UUID subcache whose architecture or VM offset disagrees", async () => {
@@ -354,7 +364,12 @@ it.each([
 ])(
   "decodes simulator cache family %i into platform %i and retains raw metadata",
   async (raw, normalized) => {
-    const fixture = dyldCacheFixture(IMAGES.slice(0, 1));
+    const fixture = dyldCacheFixture([
+      {
+        path: "/usr/lib/libSystem.B.dylib",
+        bytes: dylib("/usr/lib/libSystem.B.dylib", [], normalized),
+      },
+    ]);
     const main = Buffer.from(fixture.main);
     main.writeUInt32LE(raw, 0xd8);
     main.writeUInt32LE(1 << 9, 0xdc);

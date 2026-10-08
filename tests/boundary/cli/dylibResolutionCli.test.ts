@@ -38,6 +38,7 @@ const fixtureApp = async (): Promise<string> => {
       "<plist><dict><key>CFBundleExecutable</key><string>App</string></dict></plist>",
     "Contents/MacOS/App": machoImage({
       commands: [
+        buildVersionCommand(1),
         rpathCommand("@executable_path/../Frameworks"),
         dylibCommand(LC.LOAD_DYLIB, "@rpath/libcore.dylib"),
         dylibCommand(LC.LOAD_WEAK_DYLIB, "@rpath/libgone.dylib"),
@@ -45,10 +46,16 @@ const fixtureApp = async (): Promise<string> => {
     }),
     "Contents/Frameworks/libcore.dylib": machoImage({
       fileType: FILE_TYPE.dylib,
-      commands: [dylibCommand(LC.ID_DYLIB, "@rpath/libcore.dylib")],
+      commands: [
+        buildVersionCommand(1),
+        dylibCommand(LC.ID_DYLIB, "@rpath/libcore.dylib"),
+      ],
     }),
     "Contents/Helpers/tool": machoImage({
-      commands: [dylibCommand(LC.LOAD_DYLIB, "@loader_path/libnone.dylib")],
+      commands: [
+        buildVersionCommand(1),
+        dylibCommand(LC.LOAD_DYLIB, "@loader_path/libnone.dylib"),
+      ],
     }),
   });
   return app;
@@ -157,11 +164,15 @@ describe("trace-dylib-resolution CLI inputs", () => {
       await writeFiles(directory, {
         tool: machoImage({
           commands: [
+            buildVersionCommand(1),
             dylibCommand(LC.LOAD_DYLIB, "@loader_path/lib/libhelper.dylib"),
             dylibCommand(LC.LOAD_DYLIB, "@loader_path/../escape.dylib"),
           ],
         }),
-        "lib/libhelper.dylib": machoImage({ fileType: FILE_TYPE.dylib }),
+        "lib/libhelper.dylib": machoImage({
+          fileType: FILE_TYPE.dylib,
+          commands: [buildVersionCommand(1)],
+        }),
         "unrelated.txt": "not traversed",
       });
       const result = await cli.run({
@@ -221,11 +232,17 @@ describe("trace-dylib-resolution CLI inputs", () => {
         dyld_shared_cache_arm64e: dyldCacheFixture([
           {
             path: "/usr/lib/libSystem.B.dylib",
-            bytes: machoImage({ fileType: FILE_TYPE.dylib }),
+            bytes: machoImage({
+              fileType: FILE_TYPE.dylib,
+              commands: [buildVersionCommand(1)],
+            }),
           },
           {
             path: "/usr/lib/swift/libswiftCore.dylib",
-            bytes: machoImage({ fileType: FILE_TYPE.dylib }),
+            bytes: machoImage({
+              fileType: FILE_TYPE.dylib,
+              commands: [buildVersionCommand(1)],
+            }),
             inSubcache: true,
           },
         ]).main,
@@ -272,10 +289,14 @@ describe.skipIf(process.getuid?.() === 0)(
         await writeFiles(directory, {
           tool: machoImage({
             commands: [
+              buildVersionCommand(1),
               dylibCommand(LC.LOAD_DYLIB, "@loader_path/libsecret.dylib"),
             ],
           }),
-          "libsecret.dylib": machoImage({ fileType: FILE_TYPE.dylib }),
+          "libsecret.dylib": machoImage({
+            fileType: FILE_TYPE.dylib,
+            commands: [buildVersionCommand(1)],
+          }),
         });
         await chmod(join(directory, "libsecret.dylib"), 0o000);
         try {

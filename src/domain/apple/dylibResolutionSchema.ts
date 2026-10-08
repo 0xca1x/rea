@@ -82,7 +82,7 @@ export interface DylibSharedCacheView {
   /**
    * `mapped`: listed and inside an admitted mapping. That is address coverage,
    * not a load: a shared-cache hit also requires `image` to parse a slice this
-   * process can load. `unverified`: listed, but the subcache holding it is
+   * process can load as a dylib on its platform. `unverified`: listed, but the subcache holding it is
    * unavailable. `absent`: not listed.
    */
   lookup(path: string): "mapped" | "unverified" | "absent";
@@ -191,7 +191,7 @@ export const dylibResolutionResultSchema = z.strictObject({
     status: z.enum(["complete", "partial"]),
     unparsed_images: z.array(z.string()),
     roots_without_architecture: z.array(z.string()),
-    /** Install paths the supplied cache lists in subcaches that were unavailable. */
+    /** Listed cache paths whose bytes or process-compatible dylib representation could not be verified. */
     unverified_shared_cache_images: z.array(z.string()),
   }),
   limitations: z.array(z.string().min(1)),

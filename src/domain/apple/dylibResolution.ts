@@ -1,5 +1,6 @@
 import {
   compatibleSlice,
+  cacheServes,
   directoryOf,
   expandPrefix,
   joinPath,
@@ -55,13 +56,15 @@ interface ProcessContext {
   readonly view: DylibTreeView;
   readonly root: string;
   readonly architecture: string;
+  readonly platforms: MachoSlice["platforms"];
+  readonly searchPathsUnknown: boolean;
   readonly executable: string | null;
   readonly loaded: Map<string, LoadedImage>;
   readonly byInstallName: Map<string, string>;
   readonly images: Map<string, MachoImageFacts>;
   /** The supplied cache, when it serves this process's architecture and platform. */
   readonly sharedCache: DylibSharedCacheView | undefined;
-  /** Cached install paths whose subcache bytes were unavailable, across processes. */
+  /** Cached install paths whose bytes or loadability could not be verified. */
   readonly unverifiedCacheImages: Set<string>;
 }
 
@@ -135,7 +138,14 @@ const evaluateCandidate = async (
       const facts = await sharedCache.image(template.expansion.path);
       if (
         facts?.status === "parsed" &&
-        compatibleSlice(facts.slices, context.architecture) !== undefined
+        facts.slices.some(
+          (slice) =>
+            cacheServes(slice.architecture, context.architecture) &&
+            slice.file_type === "dylib" &&
+            slice.platforms.some(({ id }) =>
+              context.platforms.some((platform) => platform.id === id),
+            ),
+        )
       )
         return {
           ...base,
@@ -160,13 +170,24 @@ const evaluateCandidate = async (
   if (lookup.kind !== "file")
     return { ...base, outcome: "absent", resolved_path: null };
   const facts = await imageFacts(context, lookup.path);
-  const outcome: Candidate["outcome"] =
-    facts.status !== "parsed"
-      ? facts.status
-      : compatibleSlice(facts.slices, context.architecture) === undefined
-        ? "architecture-missing"
-        : "resolved";
-  return { ...base, outcome, resolved_path: lookup.path };
+  if (facts.status !== "parsed")
+    return { ...base, outcome: facts.status, resolved_path: lookup.path };
+  const slice = compatibleSlice(facts.slices, context.architecture);
+  if (slice === undefined)
+    return {
+      ...base,
+      outcome: "architecture-missing",
+      resolved_path: lookup.path,
+    };
+  if (slice.file_type !== "dylib")
+    return { ...base, outcome: "unsupported", resolved_path: lookup.path };
+  if (
+    !slice.platforms.some(({ id }) =>
+      context.platforms.some((platform) => platform.id === id),
+    )
+  )
+    return { ...base, outcome: "undetermined", resolved_path: lookup.path };
+  return { ...base, outcome: "resolved", resolved_path: lookup.path };
 };
 
 const imageFacts = async (
@@ -234,7 +255,13 @@ const resolveDependency = async (
       )
         break;
     }
-  const searched = resolution(candidates);
+  const modeled = resolution(candidates);
+  const searched: Edge["resolution"] = context.searchPathsUnknown
+    ? {
+        ...modeled,
+        status: modeled.image === null ? "undetermined" : "conditional",
+      }
+    : modeled;
   // Reusing an image that itself loads only conditionally is conditional too.
   const resolved: Edge["resolution"] =
     loaded !== undefined &&
@@ -368,6 +395,8 @@ export const traceDylibLoading = async (
             view,
             root,
             architecture: slice.architecture,
+            platforms: slice.platforms,
+            searchPathsUnknown: slice.dyld_environment.length > 0,
             executable: slice.file_type === "execute" ? root : null,
             loaded: new Map(),
             byInstallName: new Map(),

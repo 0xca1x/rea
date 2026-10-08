@@ -146,7 +146,7 @@ describe("dyld path expansion", () => {
         }),
         [plugin]: parsed(
           slice({
-            file_type: "bundle",
+            file_type: "dylib",
             dependencies: [dependency("@rpath/libshared.dylib")],
           }),
         ),
@@ -302,9 +302,12 @@ describe("dyld resolution outcomes", () => {
       trace.findings.map(({ kind, edge_index: index }) => [kind, index]),
     ).toEqual([
       ["earlier-rpath-candidate-absent", 0],
-      ["weak-load-unresolved", 1],
-      ["required-load-unresolved", 2],
       ["dyld-environment-present", null],
+    ]);
+    expect(trace.edges.map(({ resolution }) => resolution.status)).toEqual([
+      "conditional",
+      "undetermined",
+      "undetermined",
     ]);
     expect(trace.findings[0]?.explanation).toContain(
       "Contents/MacOS/../Overrides/libfound.dylib",
@@ -540,7 +543,7 @@ const cache = (
     ].includes(path)
       ? "mapped"
       : "absent",
-  image: () => Promise.resolve(parsed(slice())),
+  image: () => Promise.resolve(parsed(slice({ architecture: "arm64e" }))),
   ...overrides,
 });
 
@@ -829,4 +832,97 @@ describe("conditional loads", () => {
         trace.findings.find((finding) => finding.kind === kind)?.explanation,
       ).toContain(`${VENDOR} loads only conditionally; if it loads,`);
   });
+});
+
+describe("dependency loadability", () => {
+  it.each(["execute", "bundle", "other"] as const)(
+    "does not load cached or in-root %s images as dependencies",
+    async (fileType) => {
+      for (const useCache of [true, false]) {
+        const path = useCache
+          ? "/usr/lib/libSystem.B.dylib"
+          : "@executable_path/libinvalid.dylib";
+        const trace = await traceDylibLoading(
+          memoryView({
+            [MAIN]: executable({ dependencies: [dependency(path)] }),
+            "Contents/MacOS/libinvalid.dylib": parsed(
+              slice({ file_type: fileType }),
+            ),
+          }),
+          {
+            roots: [MAIN],
+            ...(useCache
+              ? {
+                  sharedCache: cache({
+                    image: async () =>
+                      parsed(
+                        slice({ architecture: "arm64e", file_type: fileType }),
+                      ),
+                  }),
+                }
+              : {}),
+          },
+        );
+        expect(trace.edges[0]?.resolution).toEqual({
+          status: "undetermined",
+          image: null,
+        });
+      }
+    },
+  );
+  it.each([{ platforms: [] }, { platforms: [{ id: 2, name: "ios" }] }])(
+    "keeps cached unknown or incompatible platforms uncertain (%j)",
+    async ({ platforms }) => {
+      const trace = await traceDylibLoading(
+        memoryView({
+          [MAIN]: executable({
+            dependencies: [dependency("/usr/lib/libSystem.B.dylib")],
+          }),
+        }),
+        {
+          roots: [MAIN],
+          sharedCache: cache({
+            image: async () =>
+              parsed(slice({ architecture: "arm64e", platforms })),
+          }),
+        },
+      );
+      expect(trace.edges[0]?.resolution.status).toBe("undetermined");
+      expect(trace.coverage.status).toBe("partial");
+    },
+  );
+});
+
+it("propagates embedded search-path uncertainty through found, missing, lazy and descendant edges", async () => {
+  const child = "Contents/MacOS/child.dylib";
+  const trace = await traceDylibLoading(
+    memoryView({
+      [MAIN]: executable({
+        dyld_environment: ["DYLD_LIBRARY_PATH=/tmp"],
+        dependencies: [
+          dependency("@executable_path/child.dylib"),
+          dependency("@executable_path/missing.dylib"),
+          dependency("@executable_path/lazy.dylib", {
+            command: "LC_LAZY_LOAD_DYLIB",
+          }),
+          dependency("/usr/lib/libSystem.B.dylib"),
+        ],
+      }),
+      [child]: parsed(
+        slice({ dependencies: [dependency("@loader_path/gone.dylib")] }),
+      ),
+    }),
+    { roots: [MAIN], sharedCache: cache() },
+  );
+  expect(trace.edges.map(({ resolution }) => resolution.status)).toEqual([
+    "conditional",
+    "undetermined",
+    "undetermined",
+    "conditional",
+    "undetermined",
+  ]);
+  expect(trace.edges.at(-1)?.loader_conditional).toBe(true);
+  expect(trace.findings.map(({ kind }) => kind)).toEqual([
+    "dyld-environment-present",
+  ]);
 });
