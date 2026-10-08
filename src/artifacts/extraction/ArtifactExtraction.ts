@@ -2,6 +2,8 @@ import { lstat, realpath } from "node:fs/promises";
 
 import { canonicalDigest } from "../../domain/comparisonSemantics.js";
 import { AsarArtifactReader } from "../AsarArtifactReader.js";
+import { CpioArtifactReader } from "../CpioArtifactReader.js";
+import { XarArtifactReader } from "../XarArtifactReader.js";
 import {
   ArtifactPathRegistry,
   normalizeArtifactPath,
@@ -125,12 +127,54 @@ const materializeSelection = async ({
   const output = await SafeOutputTree.create(input.outputRoot);
   let readerClosed = false;
   const extracted: ExtractedOccurrence[] = [];
+  const stack: Array<{
+    readonly reader: ArtifactReader;
+    readonly prefix: string;
+    readonly iterator: AsyncIterator<ArtifactEntry>;
+    readonly owned: boolean;
+  }> = [
+    {
+      reader,
+      prefix: "",
+      iterator: reader.entries(signal)[Symbol.asyncIterator](),
+      owned: false,
+    },
+  ];
   try {
     const materialized: SelectedOccurrence[] = [];
     const registry = new ArtifactPathRegistry();
-    for await (const entry of reader.entries(signal)) {
-      const path = normalizeArtifactPath(entry.path);
+    while (stack.length > 0) {
+      const frame = stack[stack.length - 1];
+      if (frame === undefined) break;
+      const next = await frame.iterator.next();
+      if (next.done === true) {
+        stack.pop();
+        if (frame.owned) await frame.reader.close();
+        continue;
+      }
+      const entry = next.value;
+      const path = normalizeArtifactPath(
+        frame.prefix === "" ? entry.path : `${frame.prefix}/${entry.path}`,
+      );
       registry.add(path, entry.kind);
+      // Traverse expanded PKG Payload/Scripts like inventory does, so nested
+      // members are materialized instead of silently skipped.
+      if (
+        entry.nestedArchive === "gzip-cpio" &&
+        !entry.encrypted &&
+        entry.contentUnavailable !== true
+      ) {
+        const parent = frame.reader;
+        const nested = new CpioArtifactReader((nestedSignal) =>
+          parent.open(entry, nestedSignal),
+        );
+        stack.push({
+          reader: nested,
+          prefix: path,
+          iterator: nested.entries(signal)[Symbol.asyncIterator](),
+          owned: true,
+        });
+      }
       const selectedItem = byPath.get(path);
       if (selectedItem === undefined) {
         if (entry.kind === "file" || entry.kind === "slice")
@@ -141,7 +185,7 @@ const materializeSelection = async ({
         continue;
       }
       preflight(entry);
-      const stream = await reader.open(entry, signal);
+      const stream = await frame.reader.open(entry, signal);
       const written = await output.write(
         path,
         stream,
@@ -171,6 +215,14 @@ const materializeSelection = async ({
     await output.commit();
     return result;
   } catch (cause: unknown) {
+    await Promise.allSettled(
+      stack
+        .filter(({ owned }) => owned)
+        .map(async ({ reader, iterator }) => {
+          await iterator.return?.();
+          await reader.close();
+        }),
+    );
     if (!readerClosed)
       await reader.close().catch((cause: unknown) => {
         // best-effort cleanup: reader close must not mask the extraction failure.
@@ -207,7 +259,7 @@ const createExtractionResult = (
     cleanup: { attempted: false, verified: true, residual_paths: [] },
     provenance: [],
     limitations: [
-      "All regular files in the active artifact were materialized; nested archive contents remain represented by their containing file.",
+      "All regular files in the active artifact were materialized, including members of expanded PKG Payload/Scripts archives.",
     ],
   });
 };
@@ -256,6 +308,7 @@ const createReader = async (
   )
     return new ZipArtifactReader(path, format);
   if (format === "mach-o") return new MachOSliceArtifactReader(path);
+  if (format === "pkg") return new XarArtifactReader(path);
   throw new ArtifactReaderFailure(
     "unavailable",
     `Artifact format has no extraction reader: ${format}`,

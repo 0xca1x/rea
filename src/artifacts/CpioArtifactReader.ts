@@ -316,7 +316,8 @@ export class CpioArtifactReader implements ArtifactReader {
         ),
       );
       // cpio names require exactly one terminal NUL: a missing terminator or
-      // an embedded NUL with trailing bytes is malformed.
+      // an embedded NUL with trailing bytes is malformed. Decode without
+      // replacement so distinct byte names cannot collapse to one path.
       if (
         nameBytes.length === 0 ||
         nameBytes[nameBytes.length - 1] !== 0 ||
@@ -326,7 +327,17 @@ export class CpioArtifactReader implements ArtifactReader {
           "format",
           "cpio member name is not NUL-terminated",
         );
-      const raw = nameBytes.toString("utf8", 0, nameBytes.length - 1);
+      let raw: string;
+      try {
+        raw = new TextDecoder("utf-8", { fatal: true }).decode(
+          nameBytes.subarray(0, nameBytes.length - 1),
+        );
+      } catch {
+        throw new ArtifactReaderFailure(
+          "format",
+          "cpio member name is not valid UTF-8",
+        );
+      }
       if (raw === TRAILER) {
         yield* this.#unresolvedLinks();
         return;

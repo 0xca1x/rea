@@ -328,6 +328,9 @@ export class XarArtifactReader implements ArtifactReader {
     const headerSize = header.readUInt16BE(4);
     const tocCompressed = header.readBigUInt64BE(8);
     const tocSize = header.readBigUInt64BE(16);
+    // Fixed-header checksum algorithm at offset 24: 0 is none, 1 is SHA-1,
+    // 2 is MD5. A declared algorithm requires a matching <checksum> element.
+    const headerChecksumAlg = header.readUInt32BE(24);
     if (headerSize < 28)
       throw new ArtifactReaderFailure("format", "xar header is too short");
     if (
@@ -371,15 +374,33 @@ export class XarArtifactReader implements ArtifactReader {
     const tocElement = root === null ? undefined : childElement(root, "toc");
     if (tocElement === undefined)
       throw new ArtifactReaderFailure("format", "xar TOC has no <toc> element");
-    await this.#verifyToc(tocElement, compressed);
+    await this.#verifyToc(tocElement, compressed, headerChecksumAlg);
     this.#members = collectMembers(tocElement);
   }
 
   /** The TOC checksum in the heap covers the compressed TOC bytes. */
-  async #verifyToc(toc: Element, compressed: Buffer): Promise<void> {
+  async #verifyToc(
+    toc: Element,
+    compressed: Buffer,
+    headerAlg: number,
+  ): Promise<void> {
     const checksum = childElement(toc, "checksum");
-    if (checksum === undefined) return;
-    const style = checksum?.getAttribute("style")?.toLowerCase() ?? "";
+    const expectedStyle =
+      headerAlg === 1 ? "sha1" : headerAlg === 2 ? "md5" : undefined;
+    if (checksum === undefined) {
+      if (headerAlg !== 0)
+        throw new ArtifactReaderFailure(
+          "format",
+          "xar header declares a TOC checksum but the TOC has no <checksum> element",
+        );
+      return;
+    }
+    const style = checksum.getAttribute("style")?.toLowerCase() ?? "";
+    if (expectedStyle !== undefined && style !== expectedStyle)
+      throw new ArtifactReaderFailure(
+        "format",
+        `xar TOC checksum style ${style || "(missing)"} does not match header algorithm ${expectedStyle}`,
+      );
     const algorithm = CHECKSUM_ALGORITHMS[style];
     if (algorithm === undefined)
       throw new ArtifactReaderFailure(
