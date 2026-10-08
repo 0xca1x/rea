@@ -156,14 +156,17 @@ const materializeSelection = async ({
       const path = normalizeArtifactPath(
         frame.prefix === "" ? entry.path : `${frame.prefix}/${entry.path}`,
       );
-      registry.add(path, entry.kind);
       // Traverse expanded PKG Payload/Scripts like inventory does, so nested
-      // members are materialized instead of silently skipped.
-      if (
+      // members are materialized instead of silently skipped. An expanded
+      // member acts as a container: register it as a directory and leave its
+      // archive bytes to its children, since a file and a directory cannot
+      // share one output path.
+      const expandable =
         entry.nestedArchive === "gzip-cpio" &&
         !entry.encrypted &&
-        entry.contentUnavailable !== true
-      ) {
+        entry.contentUnavailable !== true;
+      registry.add(path, expandable ? "directory" : entry.kind);
+      if (expandable) {
         const parent = frame.reader;
         const nested = new CpioArtifactReader((nestedSignal) =>
           parent.open(entry, nestedSignal),
@@ -174,6 +177,7 @@ const materializeSelection = async ({
           iterator: nested.entries(signal)[Symbol.asyncIterator](),
           owned: true,
         });
+        continue;
       }
       const selectedItem = byPath.get(path);
       if (selectedItem === undefined) {

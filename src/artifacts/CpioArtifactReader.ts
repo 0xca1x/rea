@@ -355,18 +355,26 @@ export class CpioArtifactReader implements ArtifactReader {
       if (header.fileSize > MAX_SYMLINK_TARGET_BYTES)
         await drain(this.#verified(source, header, raw));
       else target = await this.#collect(source, header, raw);
-      if (path !== undefined)
+      if (path !== undefined) {
+        let limitation: string;
+        if (target === undefined)
+          limitation = `Symlink target of ${header.fileSize} bytes exceeds ${MAX_SYMLINK_TARGET_BYTES} bytes and was not read.`;
+        else {
+          try {
+            limitation = `Symlink target: ${new TextDecoder("utf-8", { fatal: true }).decode(target)}`;
+          } catch {
+            limitation =
+              "Symlink target is not valid UTF-8 and was not decoded; the archived bytes are preserved only as a byte count.";
+          }
+        }
         yield entryOf({
           path,
           kind: "symlink",
           key,
           header,
-          limitations: [
-            target === undefined
-              ? `Symlink target of ${header.fileSize} bytes exceeds ${MAX_SYMLINK_TARGET_BYTES} bytes and was not read.`
-              : `Symlink target: ${target.toString("utf8")}`,
-          ],
+          limitations: [limitation],
         });
+      }
       return;
     }
     if (
