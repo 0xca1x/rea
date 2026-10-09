@@ -65,3 +65,42 @@ describe("Electron option evidence", () => {
     );
   });
 });
+
+describe("Electron effective preload", () => {
+  const windowPreload = (webPreferences: string) =>
+    analyzeJavaScriptStaticSource(
+      `new BrowserWindow({ webPreferences: { ${webPreferences} } });`,
+    ).electron.browser_windows[0];
+
+  it.each([
+    'preload: "./first.js", preload: runtimePath',
+    'preload: "./first.js", ...runtimeOptions',
+    'preload: "./first.js", [runtimeKey]: runtimeValue',
+    'preload: "./first.js", get preload() { return runtimePath; }',
+  ])("leaves the preload unknown after a later override in %s", (source) => {
+    expect(windowPreload(source)).toMatchObject({
+      preload_path: null,
+      preload_resolution_context: null,
+      web_preferences: expect.arrayContaining([
+        {
+          name: "preload",
+          value: { status: "literal", value: "./first.js", expression: null },
+        },
+      ]),
+    });
+  });
+
+  it.each([
+    ['preload: runtimePath, preload: "./first.js"', "./first.js"],
+    ['...runtimeOptions, preload: "./first.js"', "./first.js"],
+    ['[runtimeKey]: runtimeValue, preload: "./first.js"', "./first.js"],
+    ['preload: "./first.js", preload: "./last.js"', "./last.js"],
+    ['preload: "./first.js", ["preload"]: "./last.js"', "./last.js"],
+    ['preload: "./first.js", sandbox: true', "./first.js"],
+  ])("resolves the final static preload in %s", (source, expected) => {
+    expect(windowPreload(source)).toMatchObject({
+      preload_path: expected,
+      preload_resolution_context: "module-specifier",
+    });
+  });
+});

@@ -102,10 +102,6 @@ const collectWebPreferences = (
 } => {
   const preferences: ElectronWebPreference[] = [];
   let unknown = 0;
-  let preload: ElectronBrowserWindowPreload = {
-    preload_path: null,
-    preload_resolution_context: null,
-  };
   for (const property of object.properties) {
     if (t.isSpreadElement(property)) {
       unknown += 1;
@@ -133,11 +129,6 @@ const collectWebPreferences = (
       continue;
     }
     const path = name === "preload" ? staticPath(property.value) : undefined;
-    if (path !== undefined)
-      preload = {
-        preload_path: path,
-        preload_resolution_context: staticPathResolutionContext(property.value),
-      };
     const value: ElectronStaticValue =
       path === undefined
         ? electronStaticValue(source, property.value)
@@ -149,9 +140,32 @@ const collectWebPreferences = (
   return {
     status: "object-literal",
     preferences,
-    preload,
+    preload: effectivePreload(object),
     unknown,
   };
+};
+
+/**
+ * The preload path Electron receives is the last definition of the property.
+ * A later spread, computed key, accessor, or non-literal value can replace an
+ * earlier literal, so only a final static definition names the preload.
+ */
+const effectivePreload = (
+  object: t.ObjectExpression,
+): ElectronBrowserWindowPreload => {
+  const lookup = objectProperty(object, "preload");
+  const path =
+    lookup.status === "explicit"
+      ? staticPath(lookup.property.value)
+      : undefined;
+  return lookup.status !== "explicit" || path === undefined
+    ? { preload_path: null, preload_resolution_context: null }
+    : {
+        preload_path: path,
+        preload_resolution_context: staticPathResolutionContext(
+          lookup.property.value,
+        ),
+      };
 };
 
 const inspectContextBridge = (
