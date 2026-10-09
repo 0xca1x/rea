@@ -12,7 +12,11 @@ import {
   addJavaScriptHtmlRoles,
   addJavaScriptSourceMapOriginals,
 } from "./JavaScriptArtifactGraphDocuments.js";
-import { addJavaScriptStaticFindings } from "./JavaScriptArtifactGraphFindings.js";
+import {
+  addJavaScriptStaticFindings,
+  type JavaScriptStaticFindingOmissions,
+} from "./JavaScriptArtifactGraphFindings.js";
+import type { JavaScriptBundlerOmissions } from "./JavaScriptArtifactGraphBundlers.js";
 import {
   addJavaScriptModuleRelationships,
   type JavaScriptModuleRelationshipOmissions,
@@ -88,9 +92,9 @@ const buildJavaScriptArtifactGraphInput = (
   addJavaScriptArtifactFiles(context);
   const packageRoots = addJavaScriptPackageNodes(context);
   addJavaScriptSourceModules(context);
-  addJavaScriptBundlerNodes(context);
+  const bundlerOmissions = addJavaScriptBundlerNodes(context);
   const relationshipOmissions = addJavaScriptModuleRelationships(context);
-  addJavaScriptStaticFindings(context);
+  const findingOmissions = addJavaScriptStaticFindings(context);
   addElectronBoundaries(context);
   addJavaScriptHtmlRoles(context);
   addJavaScriptSourceMapOriginals(context);
@@ -104,11 +108,11 @@ const buildJavaScriptArtifactGraphInput = (
     nodes: accumulator.nodes(),
     edges: accumulator.edges(),
     coverage,
-    limitations: graphLimitations(
-      context,
-      coverage.status,
-      relationshipOmissions,
-    ),
+    limitations: graphLimitations(context, coverage.status, {
+      ...relationshipOmissions,
+      ...bundlerOmissions,
+      ...findingOmissions,
+    }),
   };
 };
 
@@ -173,10 +177,47 @@ const applicationGraphResourceLimit = (
         : ("items" as const),
 });
 
+type SelfReferenceOmissions = JavaScriptModuleRelationshipOmissions &
+  JavaScriptBundlerOmissions &
+  JavaScriptStaticFindingOmissions;
+
+/** Disclose each relationship omitted because it would reference itself. */
+const selfReferenceLimitations = (
+  omissions: SelfReferenceOmissions,
+): string[] =>
+  (
+    [
+      [
+        omissions.selfImports,
+        "import specifier",
+        "import specifiers",
+        "the importing module",
+      ],
+      [
+        omissions.selfAsyncChunks,
+        "bundler async-chunk request",
+        "bundler async-chunk requests",
+        "the requesting chunk",
+      ],
+      [
+        omissions.selfReferences,
+        "static reference",
+        "static references",
+        "the referencing module",
+      ],
+    ] as const
+  ).flatMap(([count, singular, plural, owner]) =>
+    count === 0
+      ? []
+      : [
+          `${String(count)} ${count === 1 ? singular : plural} resolved back to ${owner} itself and ${count === 1 ? "was" : "were"} omitted; application graph edges cannot be self-referential.`,
+        ],
+  );
+
 const graphLimitations = (
   context: JavaScriptArtifactGraphContext,
   coverage: "complete" | "partial" | "unknown" | "unavailable",
-  relationshipOmissions: JavaScriptModuleRelationshipOmissions,
+  omissions: SelfReferenceOmissions,
 ): string[] => {
   const ipc = collectElectronIpcRecords(context.analysis);
   const pairings = classifyElectronIpcPairings(ipc);
@@ -195,11 +236,7 @@ const graphLimitations = (
   );
   return [
     ...context.analysis.limitations,
-    ...(relationshipOmissions.selfImports > 0
-      ? [
-          `${String(relationshipOmissions.selfImports)} import ${relationshipOmissions.selfImports === 1 ? "specifier" : "specifiers"} resolved back to the importing module itself and ${relationshipOmissions.selfImports === 1 ? "was" : "were"} omitted; application graph edges cannot be self-referential.`,
-        ]
-      : []),
+    ...selfReferenceLimitations(omissions),
     "CommonJS and ESM binding relationships were recovered from inert syntax and resolved only within the inventoried artifact container.",
     "Webpack/Rspack factories were recovered from AST literals; REA did not invoke push handlers or bundle bootstrap code.",
     "Static imports, entrypoints, workers, endpoints, and storage relationships do not prove runtime execution.",

@@ -39,17 +39,24 @@ interface ResolvedReference {
   readonly node: ApplicationNode;
 }
 
+/** Static finding compositions the application graph cannot represent. */
+export interface JavaScriptStaticFindingOmissions {
+  /** References, such as a bundled module requiring its own key, that resolve to their source. */
+  readonly selfReferences: number;
+}
+
 /** Project imports, workers, roles, endpoints, storage, and source-map links. */
 export const addJavaScriptStaticFindings = (
   context: JavaScriptArtifactGraphContext,
-): void => {
+): JavaScriptStaticFindingOmissions => {
+  const omissions = { selfReferences: 0 };
   for (const analyzed of context.analysis.files) {
     const { file, javascript } = analyzed;
     const asset = context.assetNodes.get(file.path);
     if (javascript === null || asset === undefined) continue;
     const coverage = javascriptAnalysisCoverage(javascript);
     for (const value of javascript.references)
-      addReference(context, { file, asset, value, coverage });
+      addReference(context, { file, asset, value, coverage }, omissions);
     for (const value of javascript.endpoints)
       addEndpoint(context, { file, asset, value, coverage });
     for (const value of javascript.storage)
@@ -59,11 +66,13 @@ export const addJavaScriptStaticFindings = (
     for (const value of javascript.source_map_urls)
       addSourceMapEdge(context, { file, asset, value, coverage });
   }
+  return omissions;
 };
 
 const addReference = (
   context: JavaScriptArtifactGraphContext,
   input: FindingInput<StaticReference>,
+  omissions: { selfReferences: number },
 ): void => {
   const source =
     sourceNodeFor(context, input.file.path, input.value.module_key) ??
@@ -117,6 +126,13 @@ const addReference = (
         relation: "maps_to",
         properties: { resolved_path: resolved.path },
       });
+    return;
+  }
+  // A reference that resolves to its own source, such as a bundled module
+  // requiring its own key, cannot become an edge: the application graph
+  // forbids self-referential edges and one would fail the whole analysis.
+  if (resolved?.node.node_id === source.node_id) {
+    omissions.selfReferences += 1;
     return;
   }
   const target =
