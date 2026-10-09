@@ -5,12 +5,14 @@
 
 ### ⚠ BREAKING CHANGES
 
-* **reference:** Historical source symlinks with unreadable or unknown target_state require target: null. Placeholder target strings are rejected.
-* **domain:** function comparison results no longer advertise the unreachable truncated state or counter.
-* **javascript:** projected return fields require explicit presence and semantic object operations carry full property paths.
-* obsolete Evidence envelopes, session aliases, incomplete snapshots, and missing normalized producer facts are no longer accepted.
-* **process:** require current captures and preserve cleanup failures
-* restore caching, preserve failures, and verify fixture claims ([#1211](https://github.com/morluto/rea/issues/1211))
+Read the [6.1 to 6.2 migration guide](docs/migration-6.2.md) before upgrading. REA's `always-bump-minor` policy includes breaking changes; 6.2 is not a backward-compatibility promise. Preserve original saved files and regenerate missing observations rather than fabricating identities or facts.
+
+* **MCP / Evidence / snapshots / artifacts:** Success results are direct canonical Evidence; read `normalized_result` rather than the old `result`/`evidence` wrapper. Evidence requires nullable `analysis_profile`, session provider aliases are removed, snapshots require complete profile-bound query records, and artifact roles/permissions belong to occurrences. Recreate incompatible saved data; adding fields without recomputing their semantic identity is invalid. ([63bf914](https://github.com/morluto/rea/commit/63bf91405cf97b114a84f337fb1272d98a267999))
+* **Process captures:** Legacy v3 conversion is removed. Explicit executable identity and `event_journal` are required; retain old captures and recapture when current comparisons are needed instead of inventing launch identity or event order. ([2a77469](https://github.com/morluto/rea/commit/2a7746998d47446c4db6d4f524e0f183d6803f3f))
+* **Cleanup and evaluation:** A one-shot analysis reports cleanup failure while preserving the completed observation or primary diagnostic. Handle `cleanup_incomplete` and retained observations/resources. Configured agent-evaluation fixtures require Evidence-backed correctness, not routing or answer wording alone. ([#1211](https://github.com/morluto/rea/pull/1211), [27a9cea](https://github.com/morluto/rea/commit/27a9ceade7232c1c9a24dc7d454ae060948183a1))
+* **JavaScript:** Return-field projections require explicit presence; export-shape changes carry both sides' presence and property inventory coverage. Semantic object operations retain complete `property_path` segments. Regenerate old analysis and distinguish unknown values from unknown presence. ([475a0f8](https://github.com/morluto/rea/commit/475a0f84dac63d710e032bc7f731c1a3bda624ec))
+* **Function comparisons:** Remove the unreachable `truncated` dimension state and `summary.truncated` counter; update enum and display consumers while retaining explicit `unknown` facts. ([5510b27](https://github.com/morluto/rea/commit/5510b27d7f863a3df26212fba4a59f8df0da3712))
+* **Historical sources:** Unreadable/unknown symlink targets require `target: null`; external targets retain the observed absolute target. Reimport graphs containing display placeholders such as `<outside-root>` and handle nullable targets. ([b7b4333](https://github.com/morluto/rea/commit/b7b433370310c3ffe33d5027d8393151d5e862da))
 
 ### Features
 
