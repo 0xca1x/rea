@@ -37,6 +37,8 @@ Read the [6.1 to 6.2 migration guide](docs/migration-6.2.md) before upgrading. R
 
 ### Bug Fixes
 
+* **dev:** accept formatter-ignored staged documentation without failing the commit hook; malformed JSON remains rejected. ([bd2db2f](https://github.com/morluto/rea/commit/bd2db2f0fa495fb08dea443cd16d7683d4b86e6a))
+
 * **release:** publish reviewed release-PR merges from their exact reviewed source. ([c12bad7](https://github.com/morluto/rea/commit/c12bad7f139431fc0db7a8b7c9db1eab95f96dc2))
 
 * **android:** support owned JADX stdio on Windows ([#1276](https://github.com/morluto/rea/issues/1276)) ([636b245](https://github.com/morluto/rea/commit/636b245f1badf2a7ecfa63c6e2378ac2f7673cc3)), closes [#1262](https://github.com/morluto/rea/issues/1262)
