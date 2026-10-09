@@ -37,6 +37,8 @@ Read the [6.1 to 6.2 migration guide](docs/migration-6.2.md) before upgrading. R
 
 ### Bug Fixes
 
+* **release:** publish reviewed release-PR merges from their exact reviewed source. ([c12bad7](https://github.com/morluto/rea/commit/c12bad7f139431fc0db7a8b7c9db1eab95f96dc2))
+
 * **android:** support owned JADX stdio on Windows ([#1276](https://github.com/morluto/rea/issues/1276)) ([636b245](https://github.com/morluto/rea/commit/636b245f1badf2a7ecfa63c6e2378ac2f7673cc3)), closes [#1262](https://github.com/morluto/rea/issues/1262)
 * **android:** validate engine archive prerequisites ([#1145](https://github.com/morluto/rea/issues/1145)) ([e9ebfb9](https://github.com/morluto/rea/commit/e9ebfb94eff0699b1ea84bba000c4467fa1cb998))
 * **apple:** report unusable dylib-resolution roots as invalid input ([6a1e558](https://github.com/morluto/rea/commit/6a1e558db3ec2b69561e91ea817f1c2065dfc676))
@@ -173,6 +175,8 @@ Read the [6.1 to 6.2 migration guide](docs/migration-6.2.md) before upgrading. R
 
 
 ### Performance Improvements
+
+* **mcp:** share repeated output schema definitions. ([441813c](https://github.com/morluto/rea/commit/441813c0708dbee82ef554c91e973ae02964bf2e))
 
 * **hopper:** resolve string search records once per query ([#1229](https://github.com/morluto/rea/issues/1229)) ([9426c3f](https://github.com/morluto/rea/commit/9426c3f1bbb94711d8b33097e604b9b8ed853b5e))
 * **mcp:** reuse input schemas without losing caller guidance ([#1162](https://github.com/morluto/rea/issues/1162)) ([e1afbc1](https://github.com/morluto/rea/commit/e1afbc1914cc7ff90265313e942f34ea4a58a4fc))
